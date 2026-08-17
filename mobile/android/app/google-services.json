@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "748089157977",
+    "project_id": "medtrace-76eb8",
+    "storage_bucket": "medtrace-76eb8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:748089157977:android:0039bd2c0c04a5547c4448",
+        "android_client_info": {
+          "package_name": "com.example.medtrace_mobile"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "748089157977-l405m5fu6iha18tkdb4l2hhgml6l3jdp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAredch1MwpsZlp9808tJZjxaXfqbBWPwY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "748089157977-l405m5fu6iha18tkdb4l2hhgml6l3jdp.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:748089157977:android:0039bd2c0c04a5547c4448",
+        "android_client_info": {
+          "package_name": "Med.Trace"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "748089157977-l405m5fu6iha18tkdb4l2hhgml6l3jdp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAredch1MwpsZlp9808tJZjxaXfqbBWPwY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "748089157977-l405m5fu6iha18tkdb4l2hhgml6l3jdp.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
