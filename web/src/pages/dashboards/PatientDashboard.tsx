@@ -320,12 +320,14 @@ export const PatientDashboard: React.FC = () => {
             {activeTab === 0 && (
               <Box display="flex" flexDirection="column" gap={3}>
                 {/* Real-time Anomaly Detection Card */}
-                <AnomalyDetectionCard
-                  anomalies={anomalies}
-                  patientId={patientId}
-                  patientName={user?.name || 'Patient'}
-                  onDismiss={(id) => setAnomalies(anomalies.filter((a) => a.id !== id))}
-                />
+                {anomalies.length > 0 && (
+                  <AnomalyDetectionCard
+                    anomalies={anomalies}
+                    patientId={patientId}
+                    patientName={user?.name || 'Patient'}
+                    onDismiss={(id) => setAnomalies(anomalies.filter((a) => a.id !== id))}
+                  />
+                )}
 
                 {/* Vitals Summary Strip */}
                 <Grid container spacing={2}>
@@ -335,10 +337,19 @@ export const PatientDashboard: React.FC = () => {
                         <Favorite sx={{ color: '#DC2626', fontSize: 18 }} />
                         <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>BLOOD PRESSURE</Typography>
                       </Box>
-                      <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
-                        {vitals.length ? `${vitals[vitals.length - 1].systolicBP}/${vitals[vitals.length - 1].diastolicBP}` : '124/82'} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>mmHg</span>
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Optimal Resting Range</Typography>
+                      {vitals.length > 0 ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {vitals[vitals.length - 1].systolicBP}/{vitals[vitals.length - 1].diastolicBP} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>mmHg</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Latest Reading</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>Add vitals to see data</Typography>
+                        </>
+                      )}
                     </Paper>
                   </Grid>
 
@@ -348,10 +359,19 @@ export const PatientDashboard: React.FC = () => {
                         <MonitorHeart sx={{ color: '#00838F', fontSize: 18 }} />
                         <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>RESTING PULSE</Typography>
                       </Box>
-                      <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
-                        {vitals.length ? vitals[vitals.length - 1].heartRate : 72} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>bpm</span>
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Sinus Rhythm Normal</Typography>
+                      {vitals.length > 0 ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {vitals[vitals.length - 1].heartRate} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>bpm</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Latest Reading</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>Add vitals to see data</Typography>
+                        </>
+                      )}
                     </Paper>
                   </Grid>
 
@@ -359,12 +379,23 @@ export const PatientDashboard: React.FC = () => {
                     <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: `1px solid ${C.amber}20`, backgroundColor: '#FFFFFF' }}>
                       <Box display="flex" alignItems="center" gap={1} mb={0.5}>
                         <Medication sx={{ color: '#D97706', fontSize: 18 }} />
-                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>MEDICATION SCORE</Typography>
+                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>UPCOMING VISIT</Typography>
                       </Box>
-                      <Typography variant="h5" sx={{ fontWeight: 800, color: '#D97706' }}>
-                        92% <span style={{ fontSize: '0.8rem', color: '#64748B' }}>Adherence</span>
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: '#64748B' }}>4 Active Prescriptions</Typography>
+                      {appointments.length > 0 ? (
+                        <>
+                          <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {appointments[0].date}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#1565C0', fontWeight: 600 }}>
+                            {appointments[0].doctorName}
+                          </Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No appointments yet</Typography>
+                        </>
+                      )}
                     </Paper>
                   </Grid>
 
@@ -372,17 +403,72 @@ export const PatientDashboard: React.FC = () => {
                     <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: `1px solid ${C.purple}20`, backgroundColor: '#FFFFFF' }}>
                       <Box display="flex" alignItems="center" gap={1} mb={0.5}>
                         <CalendarMonth sx={{ color: '#7C3AED', fontSize: 18 }} />
-                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>UPCOMING VISIT</Typography>
+                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>MEDICAL REPORTS</Typography>
                       </Box>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {appointments.length ? appointments[0].date : 'Feb 24'}
-                      </Typography>
-                      <Typography variant="caption" sx={{ color: '#1565C0', fontWeight: 600 }}>
-                        {appointments.length ? appointments[0].doctorName : 'Dr. Alexander Wright'}
-                      </Typography>
+                      {reports.length > 0 ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {reports.length} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>uploaded</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Latest: {reports[0]?.reportType}</Typography>
+                        </>
+                      ) : (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No reports uploaded</Typography>
+                        </>
+                      )}
                     </Paper>
                   </Grid>
                 </Grid>
+
+                {/* Getting Started — shown only to new patients with no data */}
+                {vitals.length === 0 && appointments.length === 0 && reports.length === 0 && (
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 3.5,
+                      borderRadius: '20px',
+                      border: '1px solid #E2E8F0',
+                      background: 'linear-gradient(135deg, #EFF6FF 0%, #F0FDF4 100%)',
+                    }}
+                  >
+                    <Typography variant="h6" sx={{ fontWeight: 800, color: '#1E293B', mb: 0.5 }}>
+                      👋 Welcome to MedTrace!
+                    </Typography>
+                    <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
+                      Your dashboard is fresh and ready. Start adding your health data to unlock personalized insights, vitals analysis, and AI-driven exercise suggestions.
+                    </Typography>
+                    <Grid container spacing={2}>
+                      {[
+                        { icon: '🩺', label: 'Log Vitals', desc: 'Add your blood pressure, pulse, and glucose readings', tab: 1, color: '#1565C0' },
+                        { icon: '💊', label: 'Add Medications', desc: 'Track your prescriptions and daily dose schedule', tab: 2, color: '#D97706' },
+                        { icon: '📋', label: 'Upload Lab Reports', desc: 'Get AI analysis of your medical documents', tab: 7, color: '#7C3AED' },
+                        { icon: '🏃', label: 'Get Exercise Plan', desc: 'Receive vitals-based exercise recommendations', tab: 4, color: '#059669' },
+                      ].map((item) => (
+                        <Grid item xs={12} sm={6} md={3} key={item.label}>
+                          <Paper
+                            elevation={0}
+                            onClick={() => setActiveTab(item.tab)}
+                            sx={{
+                              p: 2.5,
+                              borderRadius: '16px',
+                              border: `2px solid ${item.color}20`,
+                              backgroundColor: '#FFFFFF',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease',
+                              '&:hover': { transform: 'translateY(-2px)', boxShadow: `0 8px 24px ${item.color}20`, borderColor: `${item.color}40` },
+                            }}
+                          >
+                            <Typography sx={{ fontSize: '2rem', mb: 1 }}>{item.icon}</Typography>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B', mb: 0.5 }}>{item.label}</Typography>
+                            <Typography variant="caption" sx={{ color: '#64748B', lineHeight: 1.4, display: 'block' }}>{item.desc}</Typography>
+                          </Paper>
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </Paper>
+                )}
 
                 {/* Longitudinal Trends Preview */}
                 <LongitudinalTrends
@@ -396,6 +482,7 @@ export const PatientDashboard: React.FC = () => {
                 <MedicationTracker patientId={patientId} />
               </Box>
             )}
+
 
             {/* ── Tab 1: Health Trends & Vitals ──────────────────────────────── */}
             {activeTab === 1 && (
@@ -430,6 +517,7 @@ export const PatientDashboard: React.FC = () => {
                 patientId={patientId}
                 patientName={user?.name}
                 chronicConditions={user?.chronicConditions}
+                vitals={vitals}
               />
             )}
 

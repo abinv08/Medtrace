@@ -29,6 +29,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { MedTraceLogo } from '../../components/Logo';
 import { useAuth } from '../../contexts/AuthContext';
+import { Navbar } from '../../components/Navbar';
 import { NotificationBell } from '../../components/NotificationBell';
 import { LongitudinalTrends } from '../../components/LongitudinalTrends';
 import { AnomalyDetectionCard } from '../../components/AnomalyDetectionCard';
@@ -50,7 +51,7 @@ import {
 } from '../../services/appointmentService';
 
 export const CaretakerDashboard: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
 
   const [dependents, setDependents] = useState<CaretakerLink[]>([]);
@@ -108,70 +109,13 @@ export const CaretakerDashboard: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const tabs = ['Dependent Overview', 'Vitals & Trends', 'Medications', 'Lab Results', 'Appointments'];
 
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: '#F0F4F8' }}>
-      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
-      <Box
-        sx={{
-          backgroundColor: '#FFFFFF',
-          borderBottom: '1px solid #E2E8F0',
-          py: 1.5,
-          px: { xs: 2, sm: 4 },
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-          boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
-        }}
-      >
-        <Box display="flex" alignItems="center" gap={2}>
-          <MedTraceLogo variant="full" size="small" />
-          <Chip
-            label="CARETAKER PORTAL"
-            size="small"
-            sx={{
-              backgroundColor: '#D97706',
-              color: '#fff',
-              fontWeight: 800,
-              fontSize: '0.68rem',
-              borderRadius: '999px',
-              height: 26,
-            }}
-          />
-        </Box>
-
-        <Box display="flex" alignItems="center" gap={2}>
-          <NotificationBell userId={user?.id || 'default'} />
-          <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 600, display: { xs: 'none', sm: 'block' } }}>
-            {user?.name}
-          </Typography>
-          <Button
-            variant="outlined"
-            onClick={handleLogout}
-            startIcon={<Logout />}
-            size="small"
-            sx={{
-              borderRadius: '999px',
-              borderColor: '#EF4444',
-              color: '#EF4444',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              '&:hover': { borderColor: '#DC2626', backgroundColor: 'rgba(239,68,68,0.05)' },
-            }}
-          >
-            Sign Out
-          </Button>
-        </Box>
-      </Box>
+      {/* ── Main Navbar ──────────────────────────────────────────────────────── */}
+      <Navbar />
 
       {/* ── Hero Banner ──────────────────────────────────────────────────────── */}
       <Box sx={{ background: 'linear-gradient(135deg, #1E293B 0%, #334155 100%)', py: 3, px: { xs: 2, sm: 4 } }}>

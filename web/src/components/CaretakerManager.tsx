@@ -53,6 +53,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [sosActive, setSosActive] = useState(false);
   const [sosFeedback, setSosFeedback] = useState<string | null>(null);
+  const [assignFeedback, setAssignFeedback] = useState<{ message: string; mailtoLink?: string } | null>(null);
 
   // Form state
   const [name, setName] = useState('');
@@ -79,16 +80,30 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
     if (!name.trim() || !email.trim()) return;
     setSubmitting(true);
     try {
+      const assignedEmail = email.trim();
+      const assignedName = name.trim();
       await assignCaretaker({
         patientId,
         patientName,
         patientPatientId,
-        caretakerName: name.trim(),
-        caretakerEmail: email.trim(),
+        caretakerName: assignedName,
+        caretakerEmail: assignedEmail,
         caretakerPhone: phone.trim(),
         relationship,
         accessLevel,
       });
+
+      const subject = encodeURIComponent(`MedTrace Caretaker Access Invitation for ${patientName}`);
+      const body = encodeURIComponent(
+        `Hello ${assignedName},\n\nYou have been authorized as a Caretaker / Guardian for ${patientName} on the MedTrace Healthcare Network.\n\nTo view vitals, medications, and clinical updates:\n1. Go to: ${window.location.origin}/register\n2. Register using this email address: ${assignedEmail}\n3. Select Role: Caretaker\n\nWhen you log in, your Caretaker Dashboard will automatically link to ${patientName}.\n\nBest regards,\nMedTrace Health Team`
+      );
+      const mailtoUrl = `mailto:${assignedEmail}?subject=${subject}&body=${body}`;
+
+      setAssignFeedback({
+        message: `Caretaker ${assignedName} (${assignedEmail}) assigned! When they log in or register with this email as a Caretaker, they will automatically see your Caretaker Dashboard.`,
+        mailtoLink: mailtoUrl,
+      });
+
       setOpenModal(false);
       setName('');
       setEmail('');
@@ -210,6 +225,30 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
             Assign Caretaker
           </Button>
         </Box>
+
+        {assignFeedback && (
+          <Alert
+            severity="success"
+            onClose={() => setAssignFeedback(null)}
+            sx={{ mb: 3, borderRadius: '12px', backgroundColor: '#ECFDF5', color: '#065F46' }}
+            action={
+              assignFeedback.mailtoLink ? (
+                <Button
+                  color="inherit"
+                  size="small"
+                  href={assignFeedback.mailtoLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ fontWeight: 800, textTransform: 'none', textDecoration: 'underline' }}
+                >
+                  Send Email Invite ✉️
+                </Button>
+              ) : undefined
+            }
+          >
+            {assignFeedback.message}
+          </Alert>
+        )}
 
         {loading ? (
           <Box display="flex" justifyContent="center" py={4}><CircularProgress size={32} /></Box>

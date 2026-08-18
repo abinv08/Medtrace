@@ -110,20 +110,14 @@ export const fetchPatientTestResults = async (patientId: string): Promise<TestRe
     );
     const snap = await getDocs(q);
     if (snap.empty) {
-      if (!LOCAL_TESTS[patientId]) {
-        LOCAL_TESTS[patientId] = DEFAULT_TEST_RESULTS.map((t) => ({ ...t, patientId }));
-      }
-      return LOCAL_TESTS[patientId];
+      return LOCAL_TESTS[patientId] || [];
     }
     const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as TestResult));
     LOCAL_TESTS[patientId] = list;
     return list.sort((a, b) => new Date(b.testDate).getTime() - new Date(a.testDate).getTime());
   } catch (err) {
     console.warn('fetchPatientTestResults fallback:', err);
-    if (!LOCAL_TESTS[patientId]) {
-      LOCAL_TESTS[patientId] = DEFAULT_TEST_RESULTS.map((t) => ({ ...t, patientId }));
-    }
-    return LOCAL_TESTS[patientId];
+    return LOCAL_TESTS[patientId] || [];
   }
 };
 
@@ -144,7 +138,7 @@ export const addTestResult = async (
     });
   } catch {
     if (!LOCAL_TESTS[result.patientId]) {
-      LOCAL_TESTS[result.patientId] = [...DEFAULT_TEST_RESULTS.map((t) => ({ ...t, patientId: result.patientId }))];
+      LOCAL_TESTS[result.patientId] = [];
     }
     LOCAL_TESTS[result.patientId].unshift(newResult);
   }

@@ -46,6 +46,12 @@ const ROLE_DEFINITIONS: RoleDefinition[] = [
     icon: <PersonOutlined sx={{ fontSize: 22 }} />,
   },
   {
+    value: 'Caretaker',
+    label: 'Caretaker',
+    description: 'Monitor family / dependents',
+    icon: <ShieldOutlined sx={{ fontSize: 22 }} />,
+  },
+  {
     value: 'Guardian',
     label: 'Guardian',
     description: 'Dependent oversight',

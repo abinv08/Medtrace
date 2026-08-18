@@ -20,6 +20,7 @@ import {
   collection,
 } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
+import { checkIsAssignedCaretaker } from './caretakerService';
 
 // ─── Single hospital name (fixed for this system) ─────────────────────────────
 export const HOSPITAL_NAME = 'MedTrace General Hospital';
@@ -113,9 +114,18 @@ const firebaseErrorMessage = (error: any): string => {
 // ─── Helper: fetch user profile from Firestore ────────────────────────────────
 export const fetchUserProfile = async (uid: string): Promise<UserProfile | null> => {
   try {
-    const snap = await getDoc(doc(db, 'users', uid));
+    const ref = doc(db, 'users', uid);
+    const snap = await getDoc(ref);
     if (snap.exists()) {
-      return snap.data() as UserProfile;
+      const data = snap.data() as UserProfile;
+      if (data.email && data.role !== 'Caretaker') {
+        const isCaretaker = await checkIsAssignedCaretaker(data.email);
+        if (isCaretaker) {
+          data.role = 'Caretaker';
+          updateDoc(ref, { role: 'Caretaker', updatedAt: serverTimestamp() }).catch(() => {});
+        }
+      }
+      return data;
     }
     return null;
   } catch {
@@ -160,14 +170,17 @@ export const authService = {
       // 2. Set display name in Firebase Auth
       await updateProfile(firebaseUser, { displayName: payload.name });
 
-      // 3. Generate Patient ID for patients
+      // 3. Check if assigned caretaker
+      const isCaretaker = await checkIsAssignedCaretaker(payload.email);
+      const effectiveRole = isCaretaker ? 'Caretaker' : (payload.role as UserProfile['role']);
+
       let patientId: string | undefined;
-      if (payload.role === 'Patient' || payload.role === 'Guardian') {
+      if (effectiveRole === 'Patient' || effectiveRole === 'Guardian') {
         patientId = await generatePatientId();
       }
 
       // 4. Build the profile — doctor gets status=pending, others active
-      const roleLower = (payload.role || '').toLowerCase();
+      const roleLower = (effectiveRole || '').toLowerCase();
       const isDoctor = roleLower === 'doctor' || roleLower === 'nurse';
       const regDate = payload.registeredDate || payload.registrationDate;
       const profileData: Omit<UserProfile, 'id'> & { createdAt: any; updatedAt: any } = {
@@ -175,7 +188,7 @@ export const authService = {
         email: payload.email.toLowerCase().trim(),
         phone: payload.phone,
         hospitalName: HOSPITAL_NAME,
-        role: payload.role as UserProfile['role'],
+        role: effectiveRole,
         patientId,
         status: isDoctor ? 'pending' : undefined,
         specialization: payload.specialization,
@@ -285,9 +298,10 @@ export const authService = {
       let profile = await fetchUserProfile(firebaseUser.uid);
 
       if (!profile) {
-        // New Google user — create profile
+        // New Google user — check if email is an assigned caretaker
+        const isCaretaker = await checkIsAssignedCaretaker(firebaseUser.email || '');
+        const resolvedRole = isCaretaker ? 'Caretaker' : ((role as UserProfile['role']) || 'Patient');
         let patientId: string | undefined;
-        const resolvedRole = (role as UserProfile['role']) || 'Patient';
         if (resolvedRole === 'Patient' || resolvedRole === 'Guardian') {
           patientId = await generatePatientId();
         }

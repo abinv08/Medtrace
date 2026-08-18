@@ -14,20 +14,22 @@ import {
   MenuItem,
   CircularProgress,
   LinearProgress,
-  Divider,
 } from '@mui/material';
 import {
   FitnessCenter,
   DirectionsRun,
   SelfImprovement,
-  Psychology,
   Add,
   CheckCircle,
   LocalFireDepartment,
   Timer,
   Favorite,
-  WarningAmber,
   AutoAwesome,
+  TrendingUp,
+  DirectionsWalk,
+  AirOutlined,
+  BalanceOutlined,
+  FitnessCenterOutlined,
 } from '@mui/icons-material';
 import {
   ExercisePlan,
@@ -36,18 +38,23 @@ import {
   fetchExerciseLogs,
   logExerciseActivity,
   generateAIExercisePlan,
+  generateVitalsBasedSuggestions,
+  VitalsSuggestion,
 } from '../services/exerciseService';
+import { VitalReading } from '../services/healthAnalyticsService';
 
 interface ExercisePlannerProps {
   patientId: string;
   patientName?: string;
   chronicConditions?: string;
+  vitals?: VitalReading[];
 }
 
 export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
   patientId,
   patientName,
   chronicConditions,
+  vitals = [],
 }) => {
   const [plan, setPlan] = useState<ExercisePlan | null>(null);
   const [logs, setLogs] = useState<ExerciseActivityLog[]>([]);
@@ -55,14 +62,15 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
   const [generatingAI, setGeneratingAI] = useState(false);
   const [openLogModal, setOpenLogModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [suggestions, setSuggestions] = useState<VitalsSuggestion[]>([]);
 
   // Form state
-  const [actName, setActName] = useState('Brisk Walking in Neighborhood');
+  const [actName, setActName] = useState('');
   const [category, setCategory] = useState<ExerciseActivityLog['category']>('Cardio');
-  const [duration, setDuration] = useState('30');
-  const [calories, setCalories] = useState('140');
+  const [duration, setDuration] = useState('');
+  const [calories, setCalories] = useState('');
   const [intensity, setIntensity] = useState<ExerciseActivityLog['intensity']>('Moderate');
-  const [avgHr, setAvgHr] = useState('110');
+  const [avgHr, setAvgHr] = useState('');
   const [notes, setNotes] = useState('');
 
   const loadData = async () => {
@@ -83,15 +91,21 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
     loadData();
   }, [patientId]);
 
+  // Derive suggestions from vitals whenever vitals change
+  useEffect(() => {
+    setSuggestions(generateVitalsBasedSuggestions(vitals));
+  }, [vitals]);
+
   const handleGenerateAI = async () => {
     setGeneratingAI(true);
     try {
+      const latestVital = vitals.length > 0 ? vitals[vitals.length - 1] : null;
       const newPlan = await generateAIExercisePlan(patientId, {
         name: patientName,
-        chronicConditions: chronicConditions || 'Hypertension, Borderline High Glucose',
-        bloodPressure: '135/85 mmHg',
+        chronicConditions: chronicConditions || (latestVital ? `Systolic BP: ${latestVital.systolicBP}, HR: ${latestVital.heartRate}` : 'General Wellness'),
+        bloodPressure: latestVital ? `${latestVital.systolicBP}/${latestVital.diastolicBP} mmHg` : undefined,
       });
-      setPlan(newPlan);
+      if (newPlan) setPlan(newPlan);
     } finally {
       setGeneratingAI(false);
     }
@@ -228,6 +242,153 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
         </Grid>
       </Paper>
 
+      {/* ── Vitals-Based Smart Suggestions ──────────────────────────────────── */}
+      {suggestions.length > 0 && !plan && (
+        <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
+          <Box display="flex" alignItems="center" gap={1.5} mb={0.5}>
+            <TrendingUp sx={{ color: '#1565C0', fontSize: 22 }} />
+            <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B' }}>
+              Smart Suggestions Based on Your Vitals
+            </Typography>
+            <Chip label="PERSONALISED" size="small" sx={{ backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 800, fontSize: '0.65rem' }} />
+          </Box>
+          <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
+            These recommendations are derived from your logged vitals. Add an AI plan for a full weekly prescription.
+          </Typography>
+
+          <Grid container spacing={2}>
+            {suggestions.map((sug) => {
+              const iconMap: Record<string, React.ReactNode> = {
+                cardio: <DirectionsWalk sx={{ fontSize: 20, color: '#1565C0' }} />,
+                breathing: <AirOutlined sx={{ fontSize: 20, color: '#059669' }} />,
+                strength: <FitnessCenterOutlined sx={{ fontSize: 20, color: '#D97706' }} />,
+                flexibility: <SelfImprovement sx={{ fontSize: 20, color: '#7C3AED' }} />,
+                balance: <BalanceOutlined sx={{ fontSize: 20, color: '#DC2626' }} />,
+              };
+              const colorMap: Record<string, string> = {
+                cardio: '#EFF6FF',
+                breathing: '#F0FDF4',
+                strength: '#FFFBEB',
+                flexibility: '#F5F3FF',
+                balance: '#FEF2F2',
+              };
+              const borderMap: Record<string, string> = {
+                cardio: '#1565C020',
+                breathing: '#05966920',
+                strength: '#D9770620',
+                flexibility: '#7C3AED20',
+                balance: '#DC262620',
+              };
+
+              return (
+                <Grid item xs={12} md={6} key={sug.id}>
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 2.5,
+                      borderRadius: '16px',
+                      border: `1px solid ${borderMap[sug.icon]}`,
+                      backgroundColor: colorMap[sug.icon],
+                      height: '100%',
+                    }}
+                  >
+                    <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={1}>
+                      <Box display="flex" alignItems="center" gap={1}>
+                        {iconMap[sug.icon]}
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B' }}>{sug.title}</Typography>
+                      </Box>
+                      <Chip label={sug.intensity} size="small" sx={{ fontSize: '0.65rem', fontWeight: 700, backgroundColor: 'rgba(255,255,255,0.7)' }} />
+                    </Box>
+
+                    <Box display="flex" gap={2} mb={1.5} flexWrap="wrap">
+                      <Box display="flex" alignItems="center" gap={0.5}>
+                        <Timer sx={{ fontSize: 14, color: '#64748B' }} />
+                        <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700 }}>{sug.duration}</Typography>
+                      </Box>
+                      <Box display="flex" alignItems="center" gap={0.5}>
+                        <CheckCircle sx={{ fontSize: 14, color: '#64748B' }} />
+                        <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700 }}>{sug.frequency}</Typography>
+                      </Box>
+                    </Box>
+
+                    <Box sx={{ p: 1.5, borderRadius: '10px', backgroundColor: 'rgba(255,255,255,0.6)', mb: 1.5 }}>
+                      <Typography variant="caption" sx={{ color: '#334155', lineHeight: 1.5, display: 'block', fontSize: '0.75rem' }}>
+                        💡 <strong>Why:</strong> {sug.reason}
+                      </Typography>
+                    </Box>
+
+                    <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600, display: 'block', mb: 0.5, fontSize: '0.72rem' }}>
+                      🌱 <strong>Benefit:</strong> {sug.benefit}
+                    </Typography>
+
+                    {sug.precautions.length > 0 && (
+                      <Typography variant="caption" sx={{ color: '#94A3B8', display: 'block', fontSize: '0.68rem' }}>
+                        ⚠️ {sug.precautions.join(' · ')}
+                      </Typography>
+                    )}
+                  </Paper>
+                </Grid>
+              );
+            })}
+          </Grid>
+
+          <Box mt={3} display="flex" justifyContent="center">
+            <Button
+              variant="contained"
+              startIcon={generatingAI ? <CircularProgress size={16} color="inherit" /> : <AutoAwesome />}
+              onClick={handleGenerateAI}
+              disabled={generatingAI}
+              sx={{
+                borderRadius: '999px',
+                background: 'linear-gradient(135deg, #065F46, #047857)',
+                color: '#fff',
+                fontWeight: 700,
+                px: 4,
+              }}
+            >
+              {generatingAI ? 'Generating...' : 'Generate Full AI Exercise Plan'}
+            </Button>
+          </Box>
+        </Paper>
+      )}
+
+      {/* ── No data empty state ──────────────────────────────────────────────── */}
+      {!plan && suggestions.length === 0 && !loading && (
+        <Paper
+          elevation={0}
+          sx={{
+            p: 4,
+            borderRadius: '20px',
+            border: '1px dashed #CBD5E1',
+            backgroundColor: '#F8FAFC',
+            textAlign: 'center',
+          }}
+        >
+          <FitnessCenter sx={{ fontSize: 48, color: '#CBD5E1', mb: 2 }} />
+          <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#94A3B8', mb: 1 }}>
+            No Exercise Plan Yet
+          </Typography>
+          <Typography variant="body2" sx={{ color: '#94A3B8', mb: 3, maxWidth: 480, mx: 'auto' }}>
+            Log your vitals (blood pressure, heart rate, glucose) in the <strong>Health Trends & Vitals</strong> tab to get personalized exercise suggestions tailored to your health readings.
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={generatingAI ? <CircularProgress size={16} color="inherit" /> : <AutoAwesome />}
+            onClick={handleGenerateAI}
+            disabled={generatingAI}
+            sx={{
+              borderRadius: '999px',
+              background: 'linear-gradient(135deg, #065F46, #047857)',
+              color: '#fff',
+              fontWeight: 700,
+              px: 4,
+            }}
+          >
+            {generatingAI ? 'Generating...' : 'Generate AI Exercise Plan'}
+          </Button>
+        </Paper>
+      )}
+
       {/* ── Active Exercise Prescription Routines ────────────────────────────── */}
       {plan && (
         <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
@@ -319,7 +480,14 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
         </Typography>
 
         <Box display="flex" flexDirection="column" gap={1.5}>
-          {logs.map((log) => (
+          {logs.length === 0 ? (
+            <Box textAlign="center" py={3}>
+              <DirectionsRun sx={{ fontSize: 36, color: '#CBD5E1', mb: 1 }} />
+              <Typography variant="body2" sx={{ color: '#94A3B8', fontWeight: 600 }}>No workouts logged yet</Typography>
+              <Typography variant="caption" sx={{ color: '#CBD5E1' }}>Click "Log Workout" to track your first activity</Typography>
+            </Box>
+          ) : (
+          logs.map((log) => (
             <Paper
               key={log.id}
               elevation={0}
@@ -376,7 +544,8 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                 </Box>
               </Box>
             </Paper>
-          ))}
+          ))
+          )}
         </Box>
       </Paper>
 

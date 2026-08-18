@@ -113,20 +113,14 @@ export const fetchPatientMedications = async (patientId: string): Promise<Medica
     );
     const snap = await getDocs(q);
     if (snap.empty) {
-      if (!LOCAL_MED_CACHE[patientId]) {
-        LOCAL_MED_CACHE[patientId] = DEFAULT_MEDICATIONS.map((m) => ({ ...m, patientId }));
-      }
-      return LOCAL_MED_CACHE[patientId];
+      return LOCAL_MED_CACHE[patientId] || [];
     }
     const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as MedicationItem));
     LOCAL_MED_CACHE[patientId] = list;
     return list;
   } catch (err) {
     console.warn('fetchPatientMedications fallback:', err);
-    if (!LOCAL_MED_CACHE[patientId]) {
-      LOCAL_MED_CACHE[patientId] = DEFAULT_MEDICATIONS.map((m) => ({ ...m, patientId }));
-    }
-    return LOCAL_MED_CACHE[patientId];
+    return LOCAL_MED_CACHE[patientId] || [];
   }
 };
 
@@ -147,7 +141,7 @@ export const addMedication = async (med: Omit<MedicationItem, 'id' | 'createdAt'
     });
   } catch {
     if (!LOCAL_MED_CACHE[med.patientId]) {
-      LOCAL_MED_CACHE[med.patientId] = [...DEFAULT_MEDICATIONS.map((m) => ({ ...m, patientId: med.patientId }))];
+      LOCAL_MED_CACHE[med.patientId] = [];
     }
     LOCAL_MED_CACHE[med.patientId].unshift(newMed);
   }

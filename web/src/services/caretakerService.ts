@@ -83,18 +83,69 @@ export const fetchPatientCaretakers = async (patientId: string): Promise<Caretak
   }
 };
 
-export const fetchAssignedPatientsForCaretaker = async (caretakerEmail: string): Promise<CaretakerLink[]> => {
+export const checkIsAssignedCaretaker = async (email: string): Promise<boolean> => {
+  if (!email) return false;
+  const normalized = email.toLowerCase().trim();
   try {
     const q = query(
       collection(db, 'caretakers'),
-      where('caretakerEmail', '==', caretakerEmail.toLowerCase().trim())
+      where('caretakerEmail', '==', normalized)
     );
     const snap = await getDocs(q);
-    if (snap.empty) {
-      // Return default linked patient for testing
+    if (!snap.empty) {
+      const validDocs = snap.docs.filter((d) => !DELETED_IDS.has(d.id));
+      if (validDocs.length > 0) return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Check local memory store
+  for (const pid of Object.keys(LOCAL_CARETAKERS)) {
+    const list = LOCAL_CARETAKERS[pid] || [];
+    if (list.some((c) => c.caretakerEmail.toLowerCase().trim() === normalized && !DELETED_IDS.has(c.id))) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+export const fetchAssignedPatientsForCaretaker = async (caretakerEmail: string): Promise<CaretakerLink[]> => {
+  const normalized = (caretakerEmail || '').toLowerCase().trim();
+  if (!normalized) return [];
+
+  try {
+    const q = query(
+      collection(db, 'caretakers'),
+      where('caretakerEmail', '==', normalized)
+    );
+    const snap = await getDocs(q);
+    
+    let results: CaretakerLink[] = snap.empty
+      ? []
+      : snap.docs.map((d) => ({ id: d.id, ...d.data() } as CaretakerLink));
+
+    // Also include matching entries from local store
+    for (const pid of Object.keys(LOCAL_CARETAKERS)) {
+      const list = LOCAL_CARETAKERS[pid] || [];
+      for (const item of list) {
+        if (item.caretakerEmail.toLowerCase().trim() === normalized) {
+          if (!results.some((r) => r.id === item.id)) {
+            results.push(item);
+          }
+        }
+      }
+    }
+
+    results = results.filter((c) => !DELETED_IDS.has(c.id));
+
+    // Fallback for default demo accounts only
+    if (results.length === 0 && (normalized.includes('example.com') || normalized === 'default')) {
       return DEFAULT_CARETAKERS;
     }
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CaretakerLink));
+
+    return results;
   } catch {
     return DEFAULT_CARETAKERS;
   }
@@ -104,8 +155,10 @@ export const assignCaretaker = async (
   link: Omit<CaretakerLink, 'id' | 'assignedAt' | 'status'>
 ): Promise<CaretakerLink> => {
   const id = `care-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const normalizedEmail = link.caretakerEmail.toLowerCase().trim();
   const newLink: CaretakerLink = {
     ...link,
+    caretakerEmail: normalizedEmail,
     id,
     status: 'active',
     assignedAt: new Date().toISOString(),

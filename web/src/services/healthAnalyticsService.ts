@@ -52,46 +52,6 @@ export interface MetricBaseline {
   unit: string;
 }
 
-// Generate realistic 30-day longitudinal trend data
-const generateMockVitals = (patientId: string): VitalReading[] => {
-  const readings: VitalReading[] = [];
-  const now = new Date();
-
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400000);
-    const dateStr = d.toISOString().split('T')[0];
-
-    // Base values with slight natural variance
-    const sysVariation = Math.sin(i / 3) * 6 + (Math.random() * 8 - 4);
-    const diaVariation = Math.sin(i / 3) * 4 + (Math.random() * 6 - 3);
-    const hrVariation = Math.cos(i / 2) * 5 + (Math.random() * 8 - 4);
-    const gluVariation = Math.sin(i / 4) * 8 + (Math.random() * 10 - 5);
-
-    // On day 2, add a mild spike for anomaly demonstration
-    const isSpikeDay = i === 2;
-
-    readings.push({
-      id: `vital-mock-${i}`,
-      patientId,
-      date: dateStr,
-      time: '08:30',
-      systolicBP: isSpikeDay ? 156 : Math.round(124 + sysVariation),
-      diastolicBP: isSpikeDay ? 98 : Math.round(82 + diaVariation),
-      heartRate: isSpikeDay ? 94 : Math.round(72 + hrVariation),
-      glucoseFasting: Math.round(102 + gluVariation),
-      glucosePostPrandial: Math.round(138 + gluVariation * 1.3),
-      spO2: Math.min(100, Math.round(98 + (Math.random() * 2 - 1))),
-      respiratoryRate: Math.round(16 + (Math.random() * 2 - 1)),
-      weightKg: Number((76.5 - (29 - i) * 0.04).toFixed(1)),
-      bmi: Number(((76.5 - (29 - i) * 0.04) / (1.75 * 1.75)).toFixed(1)),
-      cholesterolTotal: Math.round(205 + Math.sin(i / 6) * 10),
-      source: i % 3 === 0 ? 'csi_sensor' : 'manual',
-    });
-  }
-
-  return readings;
-};
-
 const LOCAL_VITALS: Record<string, VitalReading[]> = {};
 
 export const fetchPatientVitals = async (patientId: string): Promise<VitalReading[]> => {
@@ -102,19 +62,14 @@ export const fetchPatientVitals = async (patientId: string): Promise<VitalReadin
     );
     const snap = await getDocs(q);
     if (snap.empty) {
-      if (!LOCAL_VITALS[patientId]) {
-        LOCAL_VITALS[patientId] = generateMockVitals(patientId);
-      }
-      return LOCAL_VITALS[patientId];
+      // Return session-cached vitals if any were added this session
+      return LOCAL_VITALS[patientId] || [];
     }
     const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as VitalReading));
     LOCAL_VITALS[patientId] = list;
     return list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   } catch {
-    if (!LOCAL_VITALS[patientId]) {
-      LOCAL_VITALS[patientId] = generateMockVitals(patientId);
-    }
-    return LOCAL_VITALS[patientId];
+    return LOCAL_VITALS[patientId] || [];
   }
 };
 
@@ -134,7 +89,7 @@ export const addVitalReading = async (
     });
   } catch {
     if (!LOCAL_VITALS[reading.patientId]) {
-      LOCAL_VITALS[reading.patientId] = generateMockVitals(reading.patientId);
+      LOCAL_VITALS[reading.patientId] = [];
     }
     LOCAL_VITALS[reading.patientId].push(newReading);
   }

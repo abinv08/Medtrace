@@ -81,8 +81,8 @@ const DEFAULT_APPOINTMENTS: Appointment[] = [
   },
 ];
 
-// Shared global memory store across sessions
-const GLOBAL_APPOINTMENTS_STORE: Appointment[] = [...DEFAULT_APPOINTMENTS];
+// Session-only appointment store for newly booked ones
+const GLOBAL_APPOINTMENTS_STORE: Appointment[] = [];
 const LOCAL_APPOINTMENTS: Record<string, Appointment[]> = {};
 
 export const fetchPatientAppointments = async (patientId: string): Promise<Appointment[]> => {
@@ -91,17 +91,18 @@ export const fetchPatientAppointments = async (patientId: string): Promise<Appoi
     if (!snap.empty) {
       const list = snap.docs
         .map((d) => ({ id: d.id, ...d.data() } as Appointment))
-        .filter((a) => a.patientId === patientId || a.patientId === 'default');
+        .filter((a) => a.patientId === patientId);
 
       if (list.length > 0) {
         return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       }
     }
-    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId || a.patientId === 'default');
+    // Return session-cached appointments only (patient's own)
+    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId);
     return memList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   } catch (err) {
     console.warn('fetchPatientAppointments fallback:', err);
-    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId || a.patientId === 'default');
+    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId);
     return memList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }
 };

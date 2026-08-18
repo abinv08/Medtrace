@@ -1,20 +1,34 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Navigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { PatientDashboard } from './PatientDashboard';
 import { DoctorDashboard } from './DoctorDashboard';
 import { AdminDashboard } from './AdminDashboard';
 import { CaretakerDashboard } from './CaretakerDashboard';
+import { checkIsAssignedCaretaker } from '../../services/caretakerService';
 
 // ─── Role → Dashboard mapping ─────────────────────────────────────────────────
 export const RoleDashboard: React.FC = () => {
   const { roleName } = useParams<{ roleName: string }>();
   const { user, loading } = useAuth();
+  const [isCaretaker, setIsCaretaker] = useState<boolean | null>(null);
 
-  if (loading) return null;
+  useEffect(() => {
+    if (user?.email) {
+      checkIsAssignedCaretaker(user.email).then((res) => setIsCaretaker(res));
+    } else {
+      setIsCaretaker(false);
+    }
+  }, [user?.email]);
 
-  // Determine effective role from the authenticated user (not just URL param)
+  if (loading || (user?.email && isCaretaker === null)) return null;
+
+  // Determine effective role from the authenticated user or email matching
   const role = (user?.role || roleName || '').toLowerCase().replace(/-/g, ' ');
+
+  if (role === 'caretaker' || role === 'caregiver' || isCaretaker) {
+    return <CaretakerDashboard />;
+  }
 
   switch (role) {
     case 'patient':
@@ -29,10 +43,6 @@ export const RoleDashboard: React.FC = () => {
     case 'hospital administrator':
     case 'hospital admin':
       return <AdminDashboard />;
-
-    case 'caretaker':
-    case 'caregiver':
-      return <CaretakerDashboard />;
 
     default:
       return <Navigate to="/login" replace />;
