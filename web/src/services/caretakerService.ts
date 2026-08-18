@@ -56,6 +56,9 @@ const DEFAULT_CARETAKERS: CaretakerLink[] = [
 
 const LOCAL_CARETAKERS: Record<string, CaretakerLink[]> = {};
 
+// Track IDs explicitly deleted this session (covers default/local entries)
+const DELETED_IDS = new Set<string>();
+
 export const fetchPatientCaretakers = async (patientId: string): Promise<CaretakerLink[]> => {
   try {
     const q = query(
@@ -67,14 +70,16 @@ export const fetchPatientCaretakers = async (patientId: string): Promise<Caretak
       if (!LOCAL_CARETAKERS[patientId]) {
         LOCAL_CARETAKERS[patientId] = DEFAULT_CARETAKERS.map((c) => ({ ...c, patientId }));
       }
-      return LOCAL_CARETAKERS[patientId];
+      return LOCAL_CARETAKERS[patientId].filter((c) => !DELETED_IDS.has(c.id));
     }
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CaretakerLink));
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() } as CaretakerLink))
+      .filter((c) => !DELETED_IDS.has(c.id));
   } catch {
     if (!LOCAL_CARETAKERS[patientId]) {
       LOCAL_CARETAKERS[patientId] = DEFAULT_CARETAKERS.map((c) => ({ ...c, patientId }));
     }
-    return LOCAL_CARETAKERS[patientId];
+    return LOCAL_CARETAKERS[patientId].filter((c) => !DELETED_IDS.has(c.id));
   }
 };
 
@@ -130,12 +135,16 @@ export const assignCaretaker = async (
 };
 
 export const removeCaretaker = async (id: string, patientId: string): Promise<void> => {
+  // Mark as deleted in session so the fallback doesn't resurrect it
+  DELETED_IDS.add(id);
+  // Remove from local cache immediately
+  if (LOCAL_CARETAKERS[patientId]) {
+    LOCAL_CARETAKERS[patientId] = LOCAL_CARETAKERS[patientId].filter((c) => c.id !== id);
+  }
   try {
     await deleteDoc(doc(db, 'caretakers', id));
   } catch {
-    if (LOCAL_CARETAKERS[patientId]) {
-      LOCAL_CARETAKERS[patientId] = LOCAL_CARETAKERS[patientId].filter((c) => c.id !== id);
-    }
+    // Already handled via DELETED_IDS + LOCAL_CARETAKERS above
   }
 };
 

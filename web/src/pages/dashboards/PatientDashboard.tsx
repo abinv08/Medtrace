@@ -3,19 +3,24 @@ import {
   Box,
   Container,
   Typography,
-  Card,
   Button,
   Chip,
   Avatar,
   Grid,
   Paper,
-  Divider,
   CircularProgress,
   Alert,
   Tooltip,
   IconButton,
   Tab,
   Tabs,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  MenuItem,
+  Snackbar,
 } from '@mui/material';
 import {
   Person,
@@ -25,21 +30,19 @@ import {
   Medication,
   CalendarMonth,
   FitnessCenter,
-  Timeline as TimelineIcon,
   UploadFile,
-  ArrowForward,
   LocalHospital,
   Favorite,
   MonitorHeart,
   WarningAmber,
   CheckCircle,
   Edit,
-  Logout,
   ContentCopy,
   Shield,
+  Save,
+  Close,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import { MedTraceLogo } from '../../components/Logo';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   fetchPatientReports,
@@ -55,6 +58,7 @@ import { TestResultsManager } from '../../components/TestResultsManager';
 import { ExercisePlanner } from '../../components/ExercisePlanner';
 import { AppointmentBookingModal } from '../../components/AppointmentBookingModal';
 import { CaretakerManager } from '../../components/CaretakerManager';
+import { Navbar } from '../../components/Navbar';
 import {
   VitalReading,
   fetchPatientVitals,
@@ -65,6 +69,7 @@ import {
   Appointment,
   fetchPatientAppointments,
 } from '../../services/appointmentService';
+import { authService } from '../../services/authService';
 
 // ─── Colour palette ──────────────────────────────────────────────────────────
 const C = {
@@ -118,7 +123,7 @@ const reportTypeColor: Record<string, string> = {
 
 export const PatientDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState(0);
   const [reports, setReports] = useState<StoredReport[]>([]);
@@ -162,10 +167,6 @@ export const PatientDashboard: React.FC = () => {
     loadData();
   }, [loadData]);
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
 
   const copyPatientId = () => {
     if (user?.patientId) {
@@ -189,57 +190,8 @@ export const PatientDashboard: React.FC = () => {
 
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: C.bg }}>
-      {/* ── Top Bar ─────────────────────────────────────────────────────────── */}
-      <Box
-        sx={{
-          backgroundColor: C.paper,
-          borderBottom: `1px solid ${C.border}`,
-          py: 1.5,
-          px: { xs: 2, sm: 4 },
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-          boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
-        }}
-      >
-        <Box display="flex" alignItems="center" gap={2}>
-          <MedTraceLogo variant="full" size="small" />
-          <Chip
-            label="PATIENT PORTAL"
-            size="small"
-            sx={{
-              backgroundColor: C.primary,
-              color: '#fff',
-              fontWeight: 800,
-              fontSize: '0.68rem',
-              borderRadius: '999px',
-              height: 26,
-            }}
-          />
-        </Box>
-        <Box display="flex" alignItems="center" gap={2}>
-          <NotificationBell userId={patientId} />
-          <Button
-            variant="outlined"
-            onClick={handleLogout}
-            startIcon={<Logout />}
-            size="small"
-            sx={{
-              borderRadius: '999px',
-              borderColor: '#EF4444',
-              color: '#EF4444',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              '&:hover': { borderColor: '#DC2626', backgroundColor: 'rgba(239,68,68,0.05)' },
-            }}
-          >
-            Sign Out
-          </Button>
-        </Box>
-      </Box>
+      {/* ── Main Navbar ──────────────────────────────────────────────────────── */}
+      <Navbar />
 
       {/* ── Hero: Patient ID Banner ──────────────────────────────────────────── */}
       <Box
@@ -695,6 +647,73 @@ const ReportRow: React.FC<{ report: StoredReport; expanded?: boolean }> = ({ rep
 
 // ─── ProfileTab ──────────────────────────────────────────────────────────────
 const ProfileTab: React.FC<{ user: any }> = ({ user }) => {
+  const { refreshUser } = useAuth();
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false, message: '', severity: 'success',
+  });
+
+  // ── Edit form state ──────────────────────────────────────────────────────
+  const [form, setForm] = useState({
+    name: user?.name || '',
+    phone: user?.phone || '',
+    dateOfBirth: user?.dateOfBirth || '',
+    gender: user?.gender || '',
+    bloodGroup: user?.bloodGroup || '',
+    address: user?.address || '',
+    allergies: user?.allergies || '',
+    chronicConditions: user?.chronicConditions || '',
+    emergencyContact: user?.emergencyContact || '',
+  });
+
+  const handleOpen = () => {
+    setForm({
+      name: user?.name || '',
+      phone: user?.phone || '',
+      dateOfBirth: user?.dateOfBirth || '',
+      gender: user?.gender || '',
+      bloodGroup: user?.bloodGroup || '',
+      address: user?.address || '',
+      allergies: user?.allergies || '',
+      chronicConditions: user?.chronicConditions || '',
+      emergencyContact: user?.emergencyContact || '',
+    });
+    setEditOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!user?.id) return;
+    setSaving(true);
+    try {
+      const res = await authService.updateProfile(user.id, {
+        name: form.name.trim(),
+        phone: form.phone.trim(),
+        dateOfBirth: form.dateOfBirth.trim(),
+        gender: form.gender,
+        bloodGroup: form.bloodGroup,
+        address: form.address.trim(),
+        allergies: form.allergies.trim(),
+        chronicConditions: form.chronicConditions.trim(),
+        emergencyContact: form.emergencyContact.trim(),
+      });
+      if (res.success) {
+        await refreshUser();
+        setEditOpen(false);
+        setSnackbar({ open: true, message: 'Profile updated successfully!', severity: 'success' });
+      } else {
+        setSnackbar({ open: true, message: res.message, severity: 'error' });
+      }
+    } catch (e: any) {
+      setSnackbar({ open: true, message: e.message || 'Failed to save profile.', severity: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const set = (key: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm((f) => ({ ...f, [key]: e.target.value }));
+
   const fields = [
     { label: 'Full Name', value: user?.name },
     { label: 'Email Address', value: user?.email },
@@ -718,9 +737,16 @@ const ProfileTab: React.FC<{ user: any }> = ({ user }) => {
           My Profile
         </Typography>
         <Button
-          variant="outlined"
+          variant="contained"
           startIcon={<Edit />}
-          sx={{ borderRadius: '999px', fontWeight: 700, borderColor: '#E2E8F0' }}
+          onClick={handleOpen}
+          sx={{
+            borderRadius: '999px',
+            fontWeight: 700,
+            background: `linear-gradient(135deg, ${C.primary}, ${C.teal})`,
+            boxShadow: 'none',
+            '&:hover': { boxShadow: '0 4px 12px rgba(21,101,192,0.3)' },
+          }}
         >
           Edit Profile
         </Button>
@@ -757,6 +783,194 @@ const ProfileTab: React.FC<{ user: any }> = ({ user }) => {
           </Box>
         ))}
       </Paper>
+
+      {/* ── Edit Profile Dialog ──────────────────────────────────────────────── */}
+      <Dialog
+        open={editOpen}
+        onClose={() => !saving && setEditOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: '20px' } }}
+      >
+        <DialogTitle
+          sx={{
+            fontWeight: 800,
+            color: '#1E293B',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          Edit Profile
+          <IconButton size="small" onClick={() => setEditOpen(false)} disabled={saving}>
+            <Close />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers sx={{ pt: 2.5 }}>
+          <Grid container spacing={2.5}>
+            {/* Full Name */}
+            <Grid item xs={12}>
+              <TextField
+                label="Full Name"
+                fullWidth
+                size="small"
+                value={form.name}
+                onChange={set('name')}
+              />
+            </Grid>
+
+            {/* Phone */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                label="Phone Number"
+                fullWidth
+                size="small"
+                value={form.phone}
+                onChange={set('phone')}
+              />
+            </Grid>
+
+            {/* Date of Birth */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                label="Date of Birth"
+                fullWidth
+                size="small"
+                type="date"
+                value={form.dateOfBirth}
+                onChange={set('dateOfBirth')}
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+
+            {/* Gender */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                select
+                label="Gender"
+                fullWidth
+                size="small"
+                value={form.gender}
+                onChange={set('gender')}
+              >
+                <MenuItem value="">— Select —</MenuItem>
+                <MenuItem value="Male">Male</MenuItem>
+                <MenuItem value="Female">Female</MenuItem>
+                <MenuItem value="Non-Binary">Non-Binary</MenuItem>
+                <MenuItem value="Prefer not to say">Prefer not to say</MenuItem>
+              </TextField>
+            </Grid>
+
+            {/* Blood Group */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                select
+                label="Blood Group"
+                fullWidth
+                size="small"
+                value={form.bloodGroup}
+                onChange={set('bloodGroup')}
+              >
+                <MenuItem value="">— Select —</MenuItem>
+                {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map((g) => (
+                  <MenuItem key={g} value={g}>{g}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+
+            {/* Address */}
+            <Grid item xs={12}>
+              <TextField
+                label="Address"
+                fullWidth
+                size="small"
+                multiline
+                rows={2}
+                value={form.address}
+                onChange={set('address')}
+              />
+            </Grid>
+
+            {/* Allergies */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                label="Allergies"
+                fullWidth
+                size="small"
+                placeholder="e.g. Penicillin, Peanuts"
+                value={form.allergies}
+                onChange={set('allergies')}
+              />
+            </Grid>
+
+            {/* Chronic Conditions */}
+            <Grid item xs={12} sm={6}>
+              <TextField
+                label="Chronic Conditions"
+                fullWidth
+                size="small"
+                placeholder="e.g. Diabetes, Hypertension"
+                value={form.chronicConditions}
+                onChange={set('chronicConditions')}
+              />
+            </Grid>
+
+            {/* Emergency Contact */}
+            <Grid item xs={12}>
+              <TextField
+                label="Emergency Contact"
+                fullWidth
+                size="small"
+                placeholder="Name · Relationship · Phone"
+                value={form.emergencyContact}
+                onChange={set('emergencyContact')}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button
+            onClick={() => setEditOpen(false)}
+            disabled={saving}
+            sx={{ borderRadius: '999px', fontWeight: 600 }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={saving || !form.name.trim()}
+            startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save />}
+            sx={{
+              borderRadius: '999px',
+              fontWeight: 700,
+              px: 3,
+              background: `linear-gradient(135deg, ${C.primary}, ${C.teal})`,
+              boxShadow: 'none',
+            }}
+          >
+            {saving ? 'Saving…' : 'Save Changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Snackbar ─────────────────────────────────────────────────────────── */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+          severity={snackbar.severity}
+          sx={{ borderRadius: '12px', fontWeight: 600 }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
