@@ -10,11 +10,24 @@ import {
   Logout, Notifications, MedicalServices, CheckCircle, Cancel,
   Edit, ArrowBack, WarningAmber, LocalHospital, Timeline as TLIcon,
   Chat, Science, Medication, CalendarMonth, FitnessCenter, Save,
-  AccessTime, Done, Close,
+  AccessTime, Done, Close, Favorite, MonitorHeart, Refresh,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { MedTraceLogo } from '../../components/Logo';
 import { useAuth } from '../../contexts/AuthContext';
+import api from '../../services/api';
+
+export interface BackendVitals {
+  _id: string;
+  patientId: string;
+  heartRate?: number;
+  spo2?: number;
+  bloodPressureSystolic?: number;
+  bloodPressureDiastolic?: number;
+  temperature?: number;
+  source?: string;
+  recordedAt?: string;
+}
 import { NotificationBell } from '../../components/NotificationBell';
 import { LongitudinalTrends } from '../../components/LongitudinalTrends';
 import { AnomalyDetectionCard } from '../../components/AnomalyDetectionCard';
@@ -83,7 +96,7 @@ const StatCard: React.FC<{ label: string; value: number | string; icon: React.Re
 
 // ─── Doctor Dashboard ─────────────────────────────────────────────────────────
 export const DoctorDashboard: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user, token, getToken, logout } = useAuth();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState(0);
@@ -112,6 +125,8 @@ export const DoctorDashboard: React.FC = () => {
   return (
     <DoctorDashboardInner
       user={user}
+      token={token}
+      getToken={getToken}
       logout={logout}
       navigate={navigate}
       activeTab={activeTab}
@@ -184,9 +199,10 @@ const DoctorRejectedScreen: React.FC<{ user: any; logout: any; navigate: any }> 
 );
 
 // ─── Main Doctor Dashboard Inner ─────────────────────────────────────────────
+// ─── Main Doctor Dashboard Inner ─────────────────────────────────────────────
 const DoctorDashboardInner: React.FC<any> = (props) => {
   const {
-    user, logout, navigate,
+    user, token, getToken, logout, navigate,
     activeTab, setActiveTab,
     workspaceMode, setWorkspaceMode,
     searchQuery, setSearchQuery,
@@ -203,14 +219,116 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
     searchError, setSearchError,
   } = props;
 
+  const [patientVitalsMap, setPatientVitalsMap] = useState<Record<string, BackendVitals>>({});
+  const [loadingPatients, setLoadingPatients] = useState(false);
+  const [patientFetchError, setPatientFetchError] = useState<string | null>(null);
+
   const loadInitialData = useCallback(async () => {
-    const [patients, apts] = await Promise.all([
-      fetchAllPatients(),
-      fetchDoctorAppointments(user?.id || 'doc-1'),
-    ]);
-    setAllPatients(patients);
-    setDoctorAppointments(apts);
-  }, [user?.id]);
+    setLoadingPatients(true);
+    setPatientFetchError(null);
+    try {
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        try {
+          authToken = await getToken();
+        } catch {
+          /* ignore */
+        }
+      }
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+      const currentDoctorId = user?.id || '';
+
+      // 1. Fetch Patients from Backend API: GET /api/patients?doctorId=<current user>
+      let backendPatients: any[] = [];
+      try {
+        const res = await api.get(`/api/patients?doctorId=${currentDoctorId}`, { headers: authHeaders });
+        if (res.data?.success && Array.isArray(res.data.patients)) {
+          backendPatients = res.data.patients;
+        }
+      } catch (apiErr: any) {
+        console.warn('GET /api/patients?doctorId failed, trying fallback:', apiErr.message);
+      }
+
+      // If doctorId filter yielded 0, also try GET /api/patients (all patient profiles)
+      if (backendPatients.length === 0) {
+        try {
+          const resAll = await api.get('/api/patients', { headers: authHeaders });
+          if (resAll.data?.success && Array.isArray(resAll.data.patients) && resAll.data.patients.length > 0) {
+            backendPatients = resAll.data.patients;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let mappedPatients: (PatientSearchResult & { patientDocId?: string })[] = [];
+
+      if (backendPatients.length > 0) {
+        mappedPatients = backendPatients.map((p: any) => {
+          const uid =
+            typeof p.userId === 'object' && p.userId?._id
+              ? p.userId._id.toString()
+              : p.userId?.toString() || p._id?.toString();
+          const patientDocId = p._id?.toString();
+          const name = (typeof p.userId === 'object' && p.userId?.name) || p.name || 'Patient';
+          const email = (typeof p.userId === 'object' && p.userId?.email) || p.email || '';
+          const phone = (typeof p.userId === 'object' && p.userId?.phone) || p.phone || '';
+          const conditions = Array.isArray(p.medicalHistory)
+            ? p.medicalHistory.map((m: any) => m.condition).filter(Boolean).join(', ')
+            : '';
+
+          return {
+            uid,
+            patientId: p.patientId || `PT-${(patientDocId || uid).slice(-6).toUpperCase()}`,
+            patientDocId,
+            name,
+            email,
+            phone,
+            dateOfBirth: p.dateOfBirth ? String(p.dateOfBirth) : undefined,
+            gender: p.gender,
+            bloodGroup: p.bloodGroup,
+            chronicConditions: conditions,
+            createdAt: p.createdAt ? String(p.createdAt) : undefined,
+          };
+        });
+      } else {
+        // Fallback to existing mock / Firestore patients if backend is empty
+        const fallbackPatients = await fetchAllPatients().catch(() => []);
+        mappedPatients = fallbackPatients;
+      }
+
+      setAllPatients(mappedPatients);
+
+      // 2. Fetch Latest Vitals for each patient: GET /api/vitals/:patientId/latest
+      const vitalsMap: Record<string, BackendVitals> = {};
+      await Promise.allSettled(
+        mappedPatients.map(async (p) => {
+          const targetId = (p as any).patientDocId || p.uid;
+          try {
+            const vRes = await api.get(`/api/vitals/${targetId}/latest`, { headers: authHeaders });
+            if (vRes.data?.success && vRes.data?.vitals) {
+              vitalsMap[p.uid] = vRes.data.vitals;
+              if ((p as any).patientDocId) {
+                vitalsMap[(p as any).patientDocId] = vRes.data.vitals;
+              }
+            }
+          } catch {
+            // no vitals recorded yet
+          }
+        })
+      );
+      setPatientVitalsMap(vitalsMap);
+
+      // 3. Appointments Queue
+      const apts = await fetchDoctorAppointments(currentDoctorId || 'doc-1').catch(() => []);
+      setDoctorAppointments(apts);
+    } catch (e: any) {
+      console.error('Error loading doctor dashboard data:', e);
+      setPatientFetchError(e.message || 'Error loading clinical records');
+    } finally {
+      setLoadingPatients(false);
+    }
+  }, [user?.id, token, getToken]);
 
   useEffect(() => {
     loadInitialData();
@@ -229,6 +347,30 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
         setSearchError(`No patients found matching "${searchQuery}". Search by patient name (e.g. Johnathan) or Patient ID (e.g. MT-2026-000001, 000001).`);
       } else {
         setSearchResults(results);
+        let authToken = token;
+        if (!authToken && typeof getToken === 'function') {
+          try {
+            authToken = await getToken();
+          } catch {
+            /* ignore */
+          }
+        }
+        const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+        results.forEach(async (p) => {
+          const targetId = (p as any).patientDocId || p.uid;
+          try {
+            const vRes = await api.get(`/api/vitals/${targetId}/latest`, { headers: authHeaders });
+            if (vRes.data?.success && vRes.data?.vitals) {
+              setPatientVitalsMap((prev) => ({
+                ...prev,
+                [p.uid]: vRes.data.vitals,
+                [targetId]: vRes.data.vitals,
+              }));
+            }
+          } catch {
+            /* ignore */
+          }
+        });
       }
     } catch {
       setSearchError('Search failed. Please try again.');
@@ -242,16 +384,53 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
     setLoadingPatient(true);
     setActiveTab(0);
     try {
-      const [reps, tl, vit] = await Promise.all([
-        fetchPatientReports(patient.uid),
-        fetchPatientTimeline(patient.uid),
-        fetchPatientVitals(patient.uid),
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        try {
+          authToken = await getToken();
+        } catch {
+          /* ignore */
+        }
+      }
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+      const targetId = (patient as any).patientDocId || patient.uid;
+
+      const [reps, tl, vit, liveVitRes] = await Promise.all([
+        fetchPatientReports(patient.uid).catch(() => []),
+        fetchPatientTimeline(patient.uid).catch(() => []),
+        fetchPatientVitals(patient.uid).catch(() => []),
+        api.get(`/api/vitals/${targetId}/latest`, { headers: authHeaders }).catch(() => null),
       ]);
       setPatientReports(reps);
       setPatientTimeline(tl);
-      setPatientVitals(vit);
-      if (vit.length > 0) {
-        setPatientAnomalies(detectAnomalies(vit[vit.length - 1], vit));
+
+      let mergedVitals = vit;
+      if (liveVitRes?.data?.success && liveVitRes.data?.vitals) {
+        const lv = liveVitRes.data.vitals;
+        const exists = mergedVitals.some((v) => v.date === lv.recordedAt);
+        if (!exists) {
+          mergedVitals = [
+            ...mergedVitals,
+            {
+              id: lv._id || 'live-1',
+              patientId: patient.uid,
+              systolicBP: lv.bloodPressureSystolic || 120,
+              diastolicBP: lv.bloodPressureDiastolic || 80,
+              heartRate: lv.heartRate || 72,
+              respiratoryRate: 16,
+              bloodGlucose: 100,
+              spo2: lv.spo2 || 98,
+              temperature: lv.temperature || 98.6,
+              date: lv.recordedAt || new Date().toISOString(),
+              timestamp: new Date(lv.recordedAt || Date.now()).getTime(),
+            } as any,
+          ];
+        }
+      }
+      setPatientVitals(mergedVitals);
+
+      if (mergedVitals.length > 0) {
+        setPatientAnomalies(detectAnomalies(mergedVitals[mergedVitals.length - 1], mergedVitals));
       }
     } finally {
       setLoadingPatient(false);
@@ -355,27 +534,61 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
               SEARCH RESULTS ({searchResults.length})
             </Typography>
             <Box display="flex" flexDirection="column" gap={1}>
-              {searchResults.map((p: PatientSearchResult) => (
-                <Box
-                  key={p.uid}
-                  onClick={() => openPatient(p)}
-                  sx={{
-                    display: 'flex', alignItems: 'center', gap: 2, p: 1.5,
-                    borderRadius: '10px', cursor: 'pointer',
-                    '&:hover': { backgroundColor: '#F8FAFC' },
-                    transition: 'background 0.15s',
-                  }}
-                >
-                  <Avatar sx={{ backgroundColor: `${C.primary}18`, color: C.primary, fontWeight: 800, width: 40, height: 40 }}>
-                    {p.name?.charAt(0)}
-                  </Avatar>
-                  <Box flex={1}>
-                    <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
-                    <Typography variant="caption" sx={{ color: C.muted }}>{p.patientId} · {p.email}</Typography>
+              {searchResults.map((p: PatientSearchResult) => {
+                const qv = patientVitalsMap[p.uid] || patientVitalsMap[(p as any).patientDocId];
+                return (
+                  <Box
+                    key={p.uid}
+                    onClick={() => openPatient(p)}
+                    sx={{
+                      display: 'flex', alignItems: 'center', gap: 2, p: 1.5,
+                      borderRadius: '10px', cursor: 'pointer',
+                      '&:hover': { backgroundColor: '#F8FAFC' },
+                      transition: 'background 0.15s',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Avatar sx={{ backgroundColor: `${C.primary}18`, color: C.primary, fontWeight: 800, width: 40, height: 40 }}>
+                      {p.name?.charAt(0)}
+                    </Avatar>
+                    <Box sx={{ minWidth: 180, flex: { xs: '1 1 100%', sm: 1 } }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
+                      <Typography variant="caption" sx={{ color: C.muted }}>{p.patientId} · {p.email}</Typography>
+                    </Box>
+
+                    {/* Quick Vitals View */}
+                    {qv && (
+                      <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+                        {qv.bloodPressureSystolic && qv.bloodPressureDiastolic && (
+                          <Chip
+                            icon={<MonitorHeart sx={{ fontSize: '14px !important', color: `${C.teal} !important` }} />}
+                            label={`BP ${qv.bloodPressureSystolic}/${qv.bloodPressureDiastolic}`}
+                            size="small"
+                            sx={{ backgroundColor: 'rgba(0,131,143,0.08)', color: C.teal, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                          />
+                        )}
+                        {qv.heartRate && (
+                          <Chip
+                            icon={<Favorite sx={{ fontSize: '14px !important', color: `${C.red} !important` }} />}
+                            label={`${qv.heartRate} bpm`}
+                            size="small"
+                            sx={{ backgroundColor: 'rgba(220,38,38,0.08)', color: C.red, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                          />
+                        )}
+                        {qv.spo2 && (
+                          <Chip
+                            label={`SpO₂ ${qv.spo2}%`}
+                            size="small"
+                            sx={{ backgroundColor: 'rgba(21,101,192,0.08)', color: C.primary, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                          />
+                        )}
+                      </Box>
+                    )}
+
+                    <Chip label="Open Profile" size="small" sx={{ backgroundColor: `${C.primary}12`, color: C.primary, fontWeight: 700, cursor: 'pointer' }} />
                   </Box>
-                  <Chip label="Open Profile" size="small" sx={{ backgroundColor: `${C.primary}12`, color: C.primary, fontWeight: 700, cursor: 'pointer' }} />
-                </Box>
-              ))}
+                );
+              })}
             </Box>
           </Paper>
         )}
@@ -505,25 +718,104 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
 
             {workspaceMode === 'patients' ? (
               <Box>
-                <Typography variant="subtitle2" sx={{ color: C.muted, fontWeight: 700, mb: 2 }}>
-                  ACTIVE PATIENT RECORDS
-                </Typography>
-                {allPatients.length === 0 ? (
+                <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+                  <Typography variant="subtitle2" sx={{ color: C.muted, fontWeight: 700 }}>
+                    ACTIVE PATIENT RECORDS
+                  </Typography>
+                  <IconButton
+                    size="small"
+                    onClick={loadInitialData}
+                    disabled={loadingPatients}
+                    title="Refresh Patient List"
+                    sx={{ color: C.muted, '&:hover': { color: C.primary } }}
+                  >
+                    <Refresh sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </Box>
+
+                {patientFetchError && (
+                  <Alert severity="warning" sx={{ mb: 2, borderRadius: '12px' }}>
+                    {patientFetchError}
+                  </Alert>
+                )}
+
+                {loadingPatients && allPatients.length === 0 ? (
+                  <Box display="flex" justifyContent="center" py={5}>
+                    <CircularProgress size={32} sx={{ color: C.primary }} />
+                  </Box>
+                ) : allPatients.length === 0 ? (
                   <Alert severity="info" sx={{ borderRadius: '12px' }}>No patients registered yet.</Alert>
                 ) : (
                   <Box display="flex" flexDirection="column" gap={1.5}>
-                    {allPatients.map((p: PatientSearchResult) => (
-                      <Paper key={p.uid} elevation={0} onClick={() => openPatient(p)} sx={{ p: 2, borderRadius: '12px', border: `1px solid ${C.border}`, cursor: 'pointer', '&:hover': { borderColor: C.primary, backgroundColor: `${C.primary}04` }, transition: 'all 0.15s' }}>
-                        <Box display="flex" alignItems="center" gap={2}>
-                          <Avatar sx={{ backgroundColor: `${C.primary}18`, color: C.primary, fontWeight: 800 }}>{p.name?.charAt(0)}</Avatar>
-                          <Box flex={1}>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
-                            <Typography variant="caption" sx={{ color: C.muted }}>{p.patientId} · {p.email}</Typography>
+                    {allPatients.map((p: PatientSearchResult) => {
+                      const qv = patientVitalsMap[p.uid] || patientVitalsMap[(p as any).patientDocId];
+                      return (
+                        <Paper
+                          key={p.uid}
+                          elevation={0}
+                          onClick={() => openPatient(p)}
+                          sx={{
+                            p: 2,
+                            borderRadius: '12px',
+                            border: `1px solid ${C.border}`,
+                            cursor: 'pointer',
+                            '&:hover': { borderColor: C.primary, backgroundColor: `${C.primary}04` },
+                            transition: 'all 0.15s',
+                          }}
+                        >
+                          <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+                            <Avatar sx={{ backgroundColor: `${C.primary}18`, color: C.primary, fontWeight: 800 }}>
+                              {p.name?.charAt(0)}
+                            </Avatar>
+                            <Box sx={{ minWidth: 180, flex: { xs: '1 1 100%', sm: 1 } }}>
+                              <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
+                              <Typography variant="caption" sx={{ color: C.muted }}>{p.patientId} · {p.email}</Typography>
+                            </Box>
+
+                            {/* Quick Vitals View */}
+                            {qv ? (
+                              <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+                                {qv.bloodPressureSystolic && qv.bloodPressureDiastolic && (
+                                  <Chip
+                                    icon={<MonitorHeart sx={{ fontSize: '14px !important', color: `${C.teal} !important` }} />}
+                                    label={`BP ${qv.bloodPressureSystolic}/${qv.bloodPressureDiastolic}`}
+                                    size="small"
+                                    sx={{ backgroundColor: 'rgba(0,131,143,0.08)', color: C.teal, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                                  />
+                                )}
+                                {qv.heartRate && (
+                                  <Chip
+                                    icon={<Favorite sx={{ fontSize: '14px !important', color: `${C.red} !important` }} />}
+                                    label={`${qv.heartRate} bpm`}
+                                    size="small"
+                                    sx={{ backgroundColor: 'rgba(220,38,38,0.08)', color: C.red, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                                  />
+                                )}
+                                {qv.spo2 && (
+                                  <Chip
+                                    label={`SpO₂ ${qv.spo2}%`}
+                                    size="small"
+                                    sx={{ backgroundColor: 'rgba(21,101,192,0.08)', color: C.primary, fontWeight: 700, fontSize: '0.72rem', borderRadius: '6px' }}
+                                  />
+                                )}
+                              </Box>
+                            ) : (
+                              <Chip
+                                label="No vitals yet"
+                                size="small"
+                                sx={{ backgroundColor: '#F1F5F9', color: C.muted, fontSize: '0.7rem' }}
+                              />
+                            )}
+
+                            <Chip
+                              label={`Registered ${fmtDate(p.createdAt || '')}`}
+                              size="small"
+                              sx={{ backgroundColor: '#F1F5F9', fontSize: '0.7rem' }}
+                            />
                           </Box>
-                          <Chip label={`Registered ${fmtDate(p.createdAt || '')}`} size="small" sx={{ backgroundColor: '#F1F5F9', fontSize: '0.7rem' }} />
-                        </Box>
-                      </Paper>
-                    ))}
+                        </Paper>
+                      );
+                    })}
                   </Box>
                 )}
               </Box>
@@ -994,8 +1286,8 @@ ${reportSummaries || 'No analyzed reports available.'}`;
 
     try {
       const { GoogleGenerativeAI } = await import('@google/generative-ai');
+      const { getWorkingGenerativeModel } = await import('../../services/geminiService');
       const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY as string);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
       const systemContext = `You are MedTrace Clinical AI Assistant, helping a doctor review a patient's medical history.
 You have access to the following de-identified patient data:
@@ -1010,8 +1302,10 @@ IMPORTANT RULES:
 - If asked about something not in the data, say it's not available.
 - Always recommend clinical judgment over AI interpretation.`;
 
-      const chat = model.startChat({ history: [] });
-      const result = await chat.sendMessage(`${systemContext}\n\nDoctor question: ${userMsg}`);
+      const result = await getWorkingGenerativeModel(genAI, async (model) => {
+        const chat = model.startChat({ history: [] });
+        return await chat.sendMessage(`${systemContext}\n\nDoctor question: ${userMsg}`);
+      });
       const response = result.response.text();
       setMessages((prev) => [...prev, { role: 'assistant', content: response }]);
     } catch (err: any) {

@@ -41,9 +41,12 @@ import {
   Shield,
   Save,
   Close,
+  Refresh,
+  Thermostat,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import api from '../../services/api';
 import {
   fetchPatientReports,
   fetchPatientTimeline,
@@ -68,8 +71,66 @@ import {
 import {
   Appointment,
   fetchPatientAppointments,
+  normalizeAppointment,
 } from '../../services/appointmentService';
 import { authService } from '../../services/authService';
+
+// ─── Backend Clinical Models Interfaces ──────────────────────────────────────
+export interface BackendVitals {
+  _id: string;
+  patientId: string;
+  heartRate?: number;
+  spo2?: number;
+  bloodPressureSystolic?: number;
+  bloodPressureDiastolic?: number;
+  temperature?: number;
+  source: 'manual' | 'csi' | 'device';
+  recordedAt: string;
+}
+
+export interface BackendMedication {
+  _id: string;
+  patientId: string;
+  name: string;
+  dosage?: string;
+  frequency?: string;
+  startDate?: string;
+  endDate?: string;
+  prescribedBy?: {
+    _id?: string;
+    name?: string;
+    email?: string;
+    hospitalName?: string;
+    department?: string;
+  };
+  status: 'active' | 'completed' | 'stopped';
+  takenLog?: { date: string; taken: boolean }[];
+  createdAt?: string;
+}
+
+export interface BackendExercisePlan {
+  _id: string;
+  patientId: string;
+  exercises: {
+    name: string;
+    sets?: number;
+    reps?: number;
+    notes?: string;
+  }[];
+  frequency?: string;
+  assignedBy?: {
+    _id?: string;
+    name?: string;
+    email?: string;
+    hospitalName?: string;
+  };
+  progressLog?: {
+    date: string;
+    completed: boolean;
+    notes?: string;
+  }[];
+  createdAt?: string;
+}
 
 // ─── Colour palette ──────────────────────────────────────────────────────────
 const C = {
@@ -123,7 +184,7 @@ const reportTypeColor: Record<string, string> = {
 
 export const PatientDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { user, token, getToken, refreshUser } = useAuth();
 
   const [activeTab, setActiveTab] = useState(0);
   const [reports, setReports] = useState<StoredReport[]>([]);
@@ -132,40 +193,162 @@ export const PatientDashboard: React.FC = () => {
   const [anomalies, setAnomalies] = useState<AnomalyAlert[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [apiError, setApiError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [openBookingModal, setOpenBookingModal] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [dashboardToast, setDashboardToast] = useState<{
+    open: boolean;
+    message: string;
+    severity: 'success' | 'error' | 'info' | 'warning';
+  }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
+
+  // ── Real Backend API State ────────────────────────────────────────────────
+  const [latestVitals, setLatestVitals] = useState<BackendVitals | null>(null);
+  const [medicationList, setMedicationList] = useState<BackendMedication[]>([]);
+  const [exercisePlan, setExercisePlan] = useState<BackendExercisePlan | null>(null);
 
   const patientId = user?.id || 'default';
 
   const loadData = useCallback(async () => {
     if (!patientId) return;
     setLoading(true);
+    setApiError(null);
     try {
-      const [reps, tl, vit, apts] = await Promise.all([
-        fetchPatientReports(patientId),
-        fetchPatientTimeline(patientId),
-        fetchPatientVitals(patientId),
-        fetchPatientAppointments(patientId),
+      // 1. Resolve Auth Token from Context
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        try {
+          authToken = await getToken();
+        } catch {
+          /* ignore */
+        }
+      }
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+      // 2. Fetch Real Backend Endpoints:
+      //    - GET /api/vitals/:patientId/latest
+      //    - GET /api/medications/:patientId
+      //    - GET /api/exercise-plans/:patientId
+      //    - GET /api/appointments?patientId=:patientId
+      const [vitalsRes, medsRes, planRes, aptsRes] = await Promise.allSettled([
+        api.get(`/api/vitals/${patientId}/latest`, { headers: authHeaders }),
+        api.get(`/api/medications/${patientId}`, { headers: authHeaders }),
+        api.get(`/api/exercise-plans/${patientId}`, { headers: authHeaders }),
+        api.get(`/api/appointments`, { params: { patientId }, headers: authHeaders }),
+      ]);
+
+      if (vitalsRes.status === 'fulfilled' && vitalsRes.value.data?.success) {
+        setLatestVitals(vitalsRes.value.data.vitals);
+      } else {
+        setLatestVitals(null);
+      }
+
+      if (medsRes.status === 'fulfilled' && medsRes.value.data?.success) {
+        setMedicationList(medsRes.value.data.medications || []);
+      } else {
+        setMedicationList([]);
+      }
+
+      if (planRes.status === 'fulfilled' && planRes.value.data?.success) {
+        setExercisePlan(planRes.value.data.exercisePlan || null);
+      } else {
+        setExercisePlan(null);
+      }
+
+      if (aptsRes.status === 'fulfilled' && aptsRes.value.data?.success) {
+        const rawList = aptsRes.value.data.appointments || [];
+        setAppointments(rawList.map(normalizeAppointment));
+      } else {
+        const fallbackApts = await fetchPatientAppointments(patientId).catch(() => []);
+        setAppointments(fallbackApts);
+      }
+
+      // 3. Concurrently fetch timeline, reports, and vitals
+      const [reps, tl, vit] = await Promise.all([
+        fetchPatientReports(patientId).catch(() => []),
+        fetchPatientTimeline(patientId).catch(() => []),
+        fetchPatientVitals(patientId).catch(() => []),
       ]);
       setReports(reps);
       setTimeline(tl);
       setVitals(vit);
-      setAppointments(apts);
 
       if (vit.length > 0) {
         const latest = vit[vit.length - 1];
         setAnomalies(detectAnomalies(latest, vit));
       }
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error('Error loading patient dashboard data:', e);
+      setApiError(e.message || 'Unable to connect to clinical data server');
     } finally {
       setLoading(false);
     }
-  }, [patientId]);
+  }, [patientId, token, getToken]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // ── Log Medication Dose Taken Action ───────────────────────────────────────
+  const handleTakeMedication = async (medId: string) => {
+    setActionLoading(medId);
+    try {
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        authToken = await getToken();
+      }
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+      await api.post(
+        `/api/medications/${medId}/taken`,
+        { date: new Date(), taken: true },
+        { headers: authHeaders }
+      );
+
+      // Refresh medications list
+      const res = await api.get(`/api/medications/${patientId}`, { headers: authHeaders });
+      if (res.data?.success && res.data?.medications) {
+        setMedicationList(res.data.medications);
+      }
+    } catch (err: any) {
+      console.error('Error logging medication dose:', err);
+      setApiError(err.response?.data?.message || err.message || 'Failed to log medication dose');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // ── Log Completed Exercise Session Action ──────────────────────────────────
+  const handleLogExerciseSession = async (planId: string) => {
+    setActionLoading('exercise_' + planId);
+    try {
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        authToken = await getToken();
+      }
+      const authHeaders = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+      await api.put(
+        `/api/exercise-plans/${planId}/progress`,
+        { date: new Date(), completed: true },
+        { headers: authHeaders }
+      );
+
+      // Refresh exercise plan
+      const res = await api.get(`/api/exercise-plans/${patientId}`, { headers: authHeaders });
+      if (res.data?.success && res.data?.exercisePlan) {
+        setExercisePlan(res.data.exercisePlan);
+      }
+    } catch (err: any) {
+      console.error('Error logging exercise progress:', err);
+      setApiError(err.response?.data?.message || err.message || 'Failed to log exercise progress');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
 
   const copyPatientId = () => {
@@ -245,6 +428,16 @@ export const PatientDashboard: React.FC = () => {
                     <ContentCopy sx={{ fontSize: 16 }} />
                   </IconButton>
                 </Tooltip>
+                <Tooltip title="Refresh Clinical Data">
+                  <IconButton
+                    size="small"
+                    onClick={loadData}
+                    disabled={loading}
+                    sx={{ color: 'rgba(255,255,255,0.9)', ml: 0.5 }}
+                  >
+                    <Refresh sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </Tooltip>
               </Box>
             </Box>
 
@@ -310,6 +503,21 @@ export const PatientDashboard: React.FC = () => {
 
       {/* ── Tab Content Container ────────────────────────────────────────────── */}
       <Container maxWidth="lg" sx={{ py: 3.5 }}>
+        {/* ── API Error State ──────────────────────────────────────────────── */}
+        {apiError && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 3, borderRadius: '14px', border: '1px solid #FDE68A' }}
+            action={
+              <Button color="inherit" size="small" onClick={loadData}>
+                Retry
+              </Button>
+            }
+          >
+            {apiError}
+          </Alert>
+        )}
+
         {loading ? (
           <Box display="flex" justifyContent="center" py={8}>
             <CircularProgress sx={{ color: C.primary }} />
@@ -329,7 +537,7 @@ export const PatientDashboard: React.FC = () => {
                   />
                 )}
 
-                {/* Vitals Summary Strip */}
+                {/* Vitals Summary Strip — Real API Backend Integration */}
                 <Grid container spacing={2}>
                   <Grid item xs={12} sm={6} md={3}>
                     <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: `1px solid ${C.primary}20`, backgroundColor: '#FFFFFF' }}>
@@ -337,7 +545,14 @@ export const PatientDashboard: React.FC = () => {
                         <Favorite sx={{ color: '#DC2626', fontSize: 18 }} />
                         <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>BLOOD PRESSURE</Typography>
                       </Box>
-                      {vitals.length > 0 ? (
+                      {latestVitals && (latestVitals.bloodPressureSystolic || latestVitals.bloodPressureDiastolic) ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {latestVitals.bloodPressureSystolic ?? '—'}/{latestVitals.bloodPressureDiastolic ?? '—'} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>mmHg</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Live Reading ({fmtDate(latestVitals.recordedAt)})</Typography>
+                        </>
+                      ) : vitals.length > 0 ? (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
                             {vitals[vitals.length - 1].systolicBP}/{vitals[vitals.length - 1].diastolicBP} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>mmHg</span>
@@ -347,7 +562,7 @@ export const PatientDashboard: React.FC = () => {
                       ) : (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
-                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>Add vitals to see data</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No vitals recorded</Typography>
                         </>
                       )}
                     </Paper>
@@ -359,7 +574,14 @@ export const PatientDashboard: React.FC = () => {
                         <MonitorHeart sx={{ color: '#00838F', fontSize: 18 }} />
                         <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>RESTING PULSE</Typography>
                       </Box>
-                      {vitals.length > 0 ? (
+                      {latestVitals?.heartRate ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {latestVitals.heartRate} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>bpm</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● Live Reading ({latestVitals.source})</Typography>
+                        </>
+                      ) : vitals.length > 0 ? (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
                             {vitals[vitals.length - 1].heartRate} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>bpm</span>
@@ -369,7 +591,7 @@ export const PatientDashboard: React.FC = () => {
                       ) : (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
-                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>Add vitals to see data</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No vitals recorded</Typography>
                         </>
                       )}
                     </Paper>
@@ -378,10 +600,19 @@ export const PatientDashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={3}>
                     <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: `1px solid ${C.amber}20`, backgroundColor: '#FFFFFF' }}>
                       <Box display="flex" alignItems="center" gap={1} mb={0.5}>
-                        <Medication sx={{ color: '#D97706', fontSize: 18 }} />
-                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>UPCOMING VISIT</Typography>
+                        <Science sx={{ color: '#D97706', fontSize: 18 }} />
+                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>OXYGEN LEVEL (SpO2)</Typography>
                       </Box>
-                      {appointments.length > 0 ? (
+                      {latestVitals?.spo2 ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {latestVitals.spo2} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>%</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: latestVitals.spo2 >= 95 ? '#059669' : '#DC2626', fontWeight: 600 }}>
+                            ● {latestVitals.spo2 >= 95 ? 'Normal (Healthy)' : 'Low Saturation Alert'}
+                          </Typography>
+                        </>
+                      ) : appointments.length > 0 ? (
                         <>
                           <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {appointments[0].date}
@@ -393,7 +624,7 @@ export const PatientDashboard: React.FC = () => {
                       ) : (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
-                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No appointments yet</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No SpO2 recorded</Typography>
                         </>
                       )}
                     </Paper>
@@ -402,10 +633,17 @@ export const PatientDashboard: React.FC = () => {
                   <Grid item xs={12} sm={6} md={3}>
                     <Paper elevation={0} sx={{ p: 2.5, borderRadius: '16px', border: `1px solid ${C.purple}20`, backgroundColor: '#FFFFFF' }}>
                       <Box display="flex" alignItems="center" gap={1} mb={0.5}>
-                        <CalendarMonth sx={{ color: '#7C3AED', fontSize: 18 }} />
-                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>MEDICAL REPORTS</Typography>
+                        <Medication sx={{ color: '#7C3AED', fontSize: 18 }} />
+                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>ACTIVE MEDICATIONS</Typography>
                       </Box>
-                      {reports.length > 0 ? (
+                      {medicationList.length > 0 ? (
+                        <>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            {medicationList.filter(m => m.status === 'active').length || medicationList.length} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>prescriptions</span>
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: '#059669', fontWeight: 600 }}>● {medicationList[0]?.name}</Typography>
+                        </>
+                      ) : reports.length > 0 ? (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 800, color: '#1E293B' }}>
                             {reports.length} <span style={{ fontSize: '0.8rem', color: '#64748B' }}>uploaded</span>
@@ -415,7 +653,7 @@ export const PatientDashboard: React.FC = () => {
                       ) : (
                         <>
                           <Typography variant="h5" sx={{ fontWeight: 700, color: '#CBD5E1' }}>—</Typography>
-                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No reports uploaded</Typography>
+                          <Typography variant="caption" sx={{ color: '#94A3B8' }}>No medications listed</Typography>
                         </>
                       )}
                     </Paper>
@@ -503,7 +741,125 @@ export const PatientDashboard: React.FC = () => {
 
             {/* ── Tab 2: Medications & Reminders ─────────────────────────────── */}
             {activeTab === 2 && (
-              <MedicationTracker patientId={patientId} />
+              <Box display="flex" flexDirection="column" gap={3}>
+                {medicationList.length > 0 && (
+                  <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
+                    <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.5} mb={2.5}>
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                          Active Prescriptions (Live API)
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#64748B' }}>
+                          Synchronized from hospital EHR records via backend /api/medications
+                        </Typography>
+                      </Box>
+                      <Chip
+                        label={`${medicationList.length} Prescriptions Recorded`}
+                        size="small"
+                        sx={{ backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 700 }}
+                      />
+                    </Box>
+
+                    <Grid container spacing={2}>
+                      {medicationList.map((med) => {
+                        const todayStr = new Date().toISOString().slice(0, 10);
+                        const takenToday = med.takenLog?.some(
+                          (l) => l.date && new Date(l.date).toISOString().slice(0, 10) === todayStr && l.taken
+                        );
+
+                        return (
+                          <Grid item xs={12} sm={6} md={4} key={med._id}>
+                            <Paper
+                              elevation={0}
+                              sx={{
+                                p: 2.5,
+                                borderRadius: '16px',
+                                border: '1px solid #E2E8F0',
+                                backgroundColor: '#F8FAFC',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                height: '100%',
+                                justifyContent: 'space-between',
+                              }}
+                            >
+                              <Box>
+                                <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={1}>
+                                  <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                                    {med.name}
+                                  </Typography>
+                                  <Chip
+                                    label={med.status.toUpperCase()}
+                                    size="small"
+                                    sx={{
+                                      fontSize: '0.65rem',
+                                      fontWeight: 800,
+                                      backgroundColor: med.status === 'active' ? '#ECFDF5' : '#F1F5F9',
+                                      color: med.status === 'active' ? '#059669' : '#64748B',
+                                    }}
+                                  />
+                                </Box>
+
+                                {med.dosage && (
+                                  <Typography variant="body2" sx={{ fontWeight: 600, color: '#1565C0', mb: 0.5 }}>
+                                    Dosage: {med.dosage}
+                                  </Typography>
+                                )}
+
+                                {med.frequency && (
+                                  <Typography variant="caption" sx={{ color: '#64748B', display: 'block', mb: 1 }}>
+                                    Frequency: {med.frequency}
+                                  </Typography>
+                                )}
+
+                                {med.prescribedBy?.name && (
+                                  <Typography variant="caption" sx={{ color: '#64748B', display: 'block' }}>
+                                    Doctor: Dr. {med.prescribedBy.name}
+                                  </Typography>
+                                )}
+                              </Box>
+
+                              <Box mt={2}>
+                                {takenToday ? (
+                                  <Chip
+                                    icon={<CheckCircle sx={{ fontSize: 16 }} />}
+                                    label="Dose Taken Today"
+                                    color="success"
+                                    size="small"
+                                    sx={{ fontWeight: 700, width: '100%' }}
+                                  />
+                                ) : (
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    fullWidth
+                                    disabled={actionLoading === med._id}
+                                    onClick={() => handleTakeMedication(med._id)}
+                                    sx={{
+                                      borderRadius: '8px',
+                                      fontWeight: 700,
+                                      borderColor: '#059669',
+                                      color: '#059669',
+                                      '&:hover': { backgroundColor: '#ECFDF5', borderColor: '#059669' },
+                                    }}
+                                  >
+                                    {actionLoading === med._id ? (
+                                      <CircularProgress size={16} sx={{ color: '#059669' }} />
+                                    ) : (
+                                      'Mark as Taken Today'
+                                    )}
+                                  </Button>
+                                )}
+                              </Box>
+                            </Paper>
+                          </Grid>
+                        );
+                      })}
+                    </Grid>
+                  </Paper>
+                )}
+
+                <MedicationTracker patientId={patientId} />
+              </Box>
             )}
 
             {/* ── Tab 3: Lab & Test Results ──────────────────────────────────── */}
@@ -513,12 +869,86 @@ export const PatientDashboard: React.FC = () => {
 
             {/* ── Tab 4: Exercise & Wellness ─────────────────────────────────── */}
             {activeTab === 4 && (
-              <ExercisePlanner
-                patientId={patientId}
-                patientName={user?.name}
-                chronicConditions={user?.chronicConditions}
-                vitals={vitals}
-              />
+              <Box display="flex" flexDirection="column" gap={3}>
+                {exercisePlan && (
+                  <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
+                    <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2} mb={2.5}>
+                      <Box>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Typography variant="h6" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                            Prescribed Exercise Plan (Live API)
+                          </Typography>
+                          <Chip
+                            label={exercisePlan.frequency || 'Custom Schedule'}
+                            size="small"
+                            sx={{ backgroundColor: '#ECFDF5', color: '#059669', fontWeight: 800 }}
+                          />
+                        </Box>
+                        <Typography variant="caption" sx={{ color: '#64748B' }}>
+                          Synchronized via backend /api/exercise-plans to support recovery
+                        </Typography>
+                      </Box>
+
+                      <Button
+                        variant="contained"
+                        startIcon={<CheckCircle />}
+                        disabled={actionLoading === ('exercise_' + exercisePlan._id)}
+                        onClick={() => handleLogExerciseSession(exercisePlan._id)}
+                        sx={{
+                          backgroundColor: '#059669',
+                          borderRadius: '999px',
+                          fontWeight: 700,
+                          '&:hover': { backgroundColor: '#047857' },
+                        }}
+                      >
+                        {actionLoading === ('exercise_' + exercisePlan._id) ? (
+                          <CircularProgress size={18} sx={{ color: '#fff' }} />
+                        ) : (
+                          "Log Today's Session"
+                        )}
+                      </Button>
+                    </Box>
+
+                    {exercisePlan.exercises && exercisePlan.exercises.length > 0 && (
+                      <Grid container spacing={2} mb={2}>
+                        {exercisePlan.exercises.map((ex, idx) => (
+                          <Grid item xs={12} sm={6} md={4} key={idx}>
+                            <Paper elevation={0} sx={{ p: 2, borderRadius: '14px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC' }}>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                                {ex.name}
+                              </Typography>
+                              <Typography variant="caption" sx={{ color: '#059669', fontWeight: 700, display: 'block', mt: 0.5 }}>
+                                {ex.sets ? `${ex.sets} sets` : ''} {ex.reps ? `· ${ex.reps} reps` : ''}
+                              </Typography>
+                              {ex.notes && (
+                                <Typography variant="caption" sx={{ color: '#64748B', display: 'block', mt: 0.5 }}>
+                                  {ex.notes}
+                                </Typography>
+                              )}
+                            </Paper>
+                          </Grid>
+                        ))}
+                      </Grid>
+                    )}
+
+                    {exercisePlan.progressLog && exercisePlan.progressLog.length > 0 && (
+                      <Box mt={1}>
+                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>
+                          Session Completion History: {exercisePlan.progressLog.length} recorded session(s)
+                        </Typography>
+                      </Box>
+                    )}
+                  </Paper>
+                )}
+
+                <ExercisePlanner
+                  patientId={patientId}
+                  patientName={user?.name}
+                  chronicConditions={user?.chronicConditions}
+                  vitals={vitals}
+                  onPlanUpdate={(p) => setExercisePlan(p as any)}
+                />
+              </Box>
             )}
 
             {/* ── Tab 5: Appointments ────────────────────────────────────────── */}
@@ -654,10 +1084,31 @@ export const PatientDashboard: React.FC = () => {
         patientPhone={user?.phone}
         patientEmail={user?.email}
         onAppointmentBooked={(newApt) => {
-          setAppointments([newApt, ...appointments]);
-          setActiveTab(5); // switch to appointments
+          setAppointments((prev) => [newApt, ...prev.filter((a) => a.id !== newApt.id)]);
+          setDashboardToast({
+            open: true,
+            message: `Appointment booked successfully with ${newApt.doctorName} for ${newApt.date} at ${newApt.timeSlot}!`,
+            severity: 'success',
+          });
+          setActiveTab(5); // switch to appointments tab
         }}
       />
+
+      {/* ── Global Dashboard Toast Notification ────────────────────────────── */}
+      <Snackbar
+        open={dashboardToast.open}
+        autoHideDuration={4500}
+        onClose={() => setDashboardToast((t) => ({ ...t, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setDashboardToast((t) => ({ ...t, open: false }))}
+          severity={dashboardToast.severity}
+          sx={{ borderRadius: '12px', fontWeight: 600, boxShadow: '0 4px 14px rgba(0,0,0,0.15)' }}
+        >
+          {dashboardToast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

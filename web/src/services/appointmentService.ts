@@ -1,16 +1,5 @@
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  query,
-  where,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db } from '../config/firebase';
+import api from './api';
 import { createNotification } from './notificationService';
-import { getTimestampMillis } from './doctorService';
 
 export interface Appointment {
   id: string;
@@ -33,209 +22,219 @@ export interface Appointment {
   updatedAt?: any;
 }
 
-const DEFAULT_APPOINTMENTS: Appointment[] = [
-  {
-    id: 'apt-1',
-    patientId: 'default',
-    patientName: 'Johnathan Doe',
-    patientPhone: '+1 (555) 234-5678',
-    doctorId: 'doc-alexander-wright',
-    doctorName: 'Dr. Alexander Wright',
-    doctorSpecialization: 'Cardiology',
-    hospitalName: 'MedTrace General Hospital',
-    date: '2026-02-24',
-    timeSlot: '10:30 AM',
-    consultationType: 'In-Person Consultation',
-    reason: 'Routine quarterly cardiovascular review & BP check',
-    status: 'confirmed',
-    doctorNotes: 'Please bring recent lipid profile results.',
-  },
-  {
-    id: 'apt-2',
-    patientId: 'default',
-    patientName: 'Johnathan Doe',
-    doctorId: 'doc-sarah-jenkins',
-    doctorName: 'Dr. Sarah Jenkins',
-    doctorSpecialization: 'Endocrinology & Diabetes',
-    hospitalName: 'MedTrace General Hospital',
-    date: '2026-03-02',
-    timeSlot: '02:30 PM',
-    consultationType: 'Teleconsultation / Video',
-    reason: 'HbA1c & fasting glucose titration follow-up',
-    status: 'pending',
-    meetingLink: 'https://meet.medtrace.health/clinical-room-884',
-  },
-  {
-    id: 'apt-3',
-    patientId: 'default',
-    patientName: 'Johnathan Doe',
-    doctorId: 'doc-alexander-wright',
-    doctorName: 'Dr. Alexander Wright',
-    doctorSpecialization: 'Cardiology',
-    date: '2026-01-10',
-    timeSlot: '11:00 AM',
-    consultationType: 'In-Person Consultation',
-    reason: 'Initial consultation for elevated resting BP',
-    status: 'completed',
-    doctorNotes: 'Prescribed Amlodipine 5mg once daily. Advised 30 min daily walking.',
-  },
-];
+/**
+ * Normalizes backend appointment data into a uniform Appointment object.
+ */
+export const normalizeAppointment = (raw: any): Appointment => {
+  const id = raw._id || raw.id || `apt-${Date.now()}`;
+  const docObj = typeof raw.doctorId === 'object' && raw.doctorId !== null ? raw.doctorId : null;
+  const patientObj = typeof raw.patientId === 'object' && raw.patientId !== null ? raw.patientId : null;
+  const userObj = patientObj?.userId || null;
 
-// Session-only appointment store for newly booked ones
-const GLOBAL_APPOINTMENTS_STORE: Appointment[] = [];
-const LOCAL_APPOINTMENTS: Record<string, Appointment[]> = {};
+  const rawDate = raw.dateTime ? new Date(raw.dateTime) : (raw.date ? new Date(raw.date) : new Date());
+  const dateStr = !isNaN(rawDate.getTime()) ? rawDate.toISOString().split('T')[0] : (raw.date || '');
+  const timeSlotStr = raw.timeSlot || (!isNaN(rawDate.getTime())
+    ? rawDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '10:00 AM');
 
+  const notesStr: string = raw.notes || '';
+  const formatMatch = notesStr.match(/Format:\s*([^|]+)/i);
+  const linkMatch = notesStr.match(/Link:\s*([^|]+)/i);
+  const docNotesMatch = notesStr.match(/Notes?:\s*([^|]+)/i);
+
+  const consultationType = raw.consultationType || (formatMatch ? formatMatch[1].trim() : 'In-Person Consultation');
+  const meetingLink = raw.meetingLink || (linkMatch ? linkMatch[1].trim() : undefined);
+
+  return {
+    id,
+    patientId: patientObj?._id || patientObj?.id || raw.patientId || 'default',
+    patientName: userObj?.name || raw.patientName || 'Patient',
+    patientPhone: userObj?.phone || raw.patientPhone,
+    patientEmail: userObj?.email || raw.patientEmail,
+    doctorId: docObj?._id || docObj?.id || raw.doctorId || 'doc-1',
+    doctorName: docObj?.name || raw.doctorName || 'Dr. Specialist',
+    doctorSpecialization: docObj?.department || raw.doctorSpecialization || 'Clinical Medicine',
+    hospitalName: docObj?.hospitalName || raw.hospitalName || 'MedTrace General Hospital',
+    date: dateStr,
+    timeSlot: timeSlotStr,
+    consultationType: consultationType as any,
+    reason: raw.reason || 'General clinical consultation',
+    status: raw.status || 'pending',
+    doctorNotes: raw.doctorNotes || (docNotesMatch ? docNotesMatch[1].trim() : raw.notes),
+    meetingLink,
+    createdAt: raw.createdAt || new Date().toISOString(),
+    updatedAt: raw.updatedAt || new Date().toISOString(),
+  };
+};
+
+/**
+ * Fetch appointments for a patient using GET /api/appointments?patientId=:patientId
+ */
 export const fetchPatientAppointments = async (patientId: string): Promise<Appointment[]> => {
   try {
-    const snap = await getDocs(collection(db, 'appointments'));
-    if (!snap.empty) {
-      const list = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() } as Appointment))
-        .filter((a) => a.patientId === patientId);
-
-      if (list.length > 0) {
-        return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      }
+    const res = await api.get('/api/appointments', {
+      params: { patientId },
+    });
+    if (res.data?.success && Array.isArray(res.data?.appointments)) {
+      return res.data.appointments
+        .map(normalizeAppointment)
+        .sort((a: Appointment, b: Appointment) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }
-    // Return session-cached appointments only (patient's own)
-    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId);
-    return memList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  } catch (err) {
-    console.warn('fetchPatientAppointments fallback:', err);
-    const memList = GLOBAL_APPOINTMENTS_STORE.filter((a) => a.patientId === patientId);
-    return memList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return [];
+  } catch (err: any) {
+    console.warn('fetchPatientAppointments error:', err);
+    return [];
   }
 };
 
+/**
+ * Fetch appointments for a doctor using GET /api/appointments?doctorId=:doctorId
+ */
 export const fetchDoctorAppointments = async (doctorId?: string, doctorName?: string): Promise<Appointment[]> => {
   try {
-    const snap = await getDocs(collection(db, 'appointments'));
-    let liveList: Appointment[] = [];
-    if (!snap.empty) {
-      liveList = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Appointment));
-    }
+    const params: Record<string, string> = {};
+    if (doctorId) params.doctorId = doctorId;
 
-    // Merge live Firestore appointments with global store
-    const existingIds = new Set(liveList.map((a) => a.id));
-    const merged = [
-      ...liveList,
-      ...GLOBAL_APPOINTMENTS_STORE.filter((a) => !existingIds.has(a.id)),
-    ];
-
-    if (doctorId || doctorName) {
-      const docNameClean = (doctorName || '').toLowerCase().trim();
-      const docIdClean = (doctorId || '').toLowerCase().trim();
-
-      const specific = merged.filter((a) => {
-        const matchesId = docIdClean && (a.doctorId?.toLowerCase() === docIdClean || a.doctorId === doctorId);
-        const matchesName = docNameClean && (a.doctorName?.toLowerCase().includes(docNameClean) || docNameClean.includes(a.doctorName?.toLowerCase()));
-        return matchesId || matchesName;
-      });
-
-      // If doctor has specific appointments, return them; otherwise return all available appointments for triage
-      if (specific.length > 0) {
-        return specific.sort((a, b) => {
-          if (a.status === 'pending' && b.status !== 'pending') return -1;
-          if (b.status === 'pending' && a.status !== 'pending') return 1;
-          return new Date(b.date).getTime() - new Date(a.date).getTime();
-        });
+    const res = await api.get('/api/appointments', { params });
+    if (res.data?.success && Array.isArray(res.data?.appointments)) {
+      let list = res.data.appointments.map(normalizeAppointment);
+      if (doctorName && !doctorId) {
+        const cleanName = doctorName.toLowerCase().trim();
+        list = list.filter((a: Appointment) =>
+          a.doctorName.toLowerCase().includes(cleanName) || cleanName.includes(a.doctorName.toLowerCase())
+        );
       }
+      return list.sort((a: Appointment, b: Appointment) => {
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (b.status === 'pending' && a.status !== 'pending') return 1;
+        return new Date(b.date).getTime() - new Date(a.date).getTime();
+      });
     }
-
-    return merged.sort((a, b) => {
-      if (a.status === 'pending' && b.status !== 'pending') return -1;
-      if (b.status === 'pending' && a.status !== 'pending') return 1;
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
-    });
+    return [];
   } catch (err) {
-    console.warn('fetchDoctorAppointments fallback:', err);
-    return GLOBAL_APPOINTMENTS_STORE.sort((a, b) => {
-      if (a.status === 'pending' && b.status !== 'pending') return -1;
-      if (b.status === 'pending' && a.status !== 'pending') return 1;
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
-    });
+    console.warn('fetchDoctorAppointments error:', err);
+    return [];
   }
 };
 
+/**
+ * Book an appointment using POST /api/appointments
+ */
 export const bookAppointment = async (
   apt: Omit<Appointment, 'id' | 'status' | 'createdAt' | 'updatedAt'>
 ): Promise<Appointment> => {
-  const id = `apt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-  const newApt: Appointment = {
-    ...apt,
-    id,
+  // Convert date & timeSlot to ISO dateTime string
+  let appointmentDateTime: Date;
+  try {
+    const [timeStr, period] = (apt.timeSlot || '10:00 AM').split(' ');
+    let [hours, minutes] = (timeStr || '10:00').split(':').map(Number);
+    if (period === 'PM' && hours < 12) hours += 12;
+    if (period === 'AM' && hours === 12) hours = 0;
+    appointmentDateTime = new Date(apt.date);
+    appointmentDateTime.setHours(hours || 10, minutes || 0, 0, 0);
+  } catch {
+    appointmentDateTime = new Date(apt.date || Date.now());
+  }
+
+  const notes = [
+    apt.consultationType ? `Format: ${apt.consultationType}` : '',
+    apt.doctorName ? `Doctor: ${apt.doctorName}` : '',
+    apt.doctorSpecialization ? `Specialization: ${apt.doctorSpecialization}` : '',
+    apt.hospitalName ? `Hospital: ${apt.hospitalName}` : '',
+    apt.timeSlot ? `Slot: ${apt.timeSlot}` : '',
+    apt.meetingLink ? `Link: ${apt.meetingLink}` : '',
+  ].filter(Boolean).join(' | ');
+
+  const payload = {
+    patientId: apt.patientId,
+    doctorId: apt.doctorId,
+    dateTime: appointmentDateTime.toISOString(),
+    reason: apt.reason,
+    notes,
     status: 'pending',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
   };
 
-  // Add to global store immediately
-  GLOBAL_APPOINTMENTS_STORE.unshift(newApt);
+  const res = await api.post('/api/appointments', payload);
 
+  let createdApt: Appointment;
+  if (res.data?.success && res.data?.appointment) {
+    createdApt = normalizeAppointment({
+      ...res.data.appointment,
+      patientName: apt.patientName,
+      patientPhone: apt.patientPhone,
+      patientEmail: apt.patientEmail,
+      doctorName: apt.doctorName,
+      doctorSpecialization: apt.doctorSpecialization,
+      hospitalName: apt.hospitalName,
+      date: apt.date,
+      timeSlot: apt.timeSlot,
+      consultationType: apt.consultationType,
+      meetingLink: apt.meetingLink,
+    });
+  } else {
+    createdApt = normalizeAppointment({
+      id: `apt-${Date.now()}`,
+      ...apt,
+      status: 'pending',
+      dateTime: appointmentDateTime.toISOString(),
+    });
+  }
+
+  // Send notifications for patient & doctor
   try {
-    await setDoc(doc(db, 'appointments', id), {
-      ...newApt,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    console.warn('bookAppointment firestore write failed, saved to global store:', err);
-  }
-
-  // Create notifications for patient and doctor
-  await createNotification({
-    userId: apt.patientId,
-    title: `Appointment Request Submitted`,
-    message: `Requested consultation with ${apt.doctorName} on ${apt.date} at ${apt.timeSlot}.`,
-    category: 'appointment',
-    priority: 'normal',
-  });
-
-  if (apt.doctorId) {
     await createNotification({
-      userId: apt.doctorId,
-      title: `New Appointment Booking: ${apt.patientName}`,
-      message: `Requested ${apt.consultationType} on ${apt.date} at ${apt.timeSlot}.`,
+      userId: apt.patientId,
+      title: 'Appointment Request Submitted',
+      message: `Requested consultation with ${apt.doctorName} on ${apt.date} at ${apt.timeSlot}.`,
       category: 'appointment',
-      priority: 'high',
+      priority: 'normal',
     });
+
+    if (apt.doctorId) {
+      await createNotification({
+        userId: apt.doctorId,
+        title: `New Appointment Booking: ${apt.patientName}`,
+        message: `Requested ${apt.consultationType} on ${apt.date} at ${apt.timeSlot}.`,
+        category: 'appointment',
+        priority: 'high',
+      });
+    }
+  } catch (notifErr) {
+    console.warn('Could not post appointment in-app notification:', notifErr);
   }
 
-  return newApt;
+  return createdApt;
 };
 
+/**
+ * Update appointment status using PUT /api/appointments/:id/status
+ */
 export const updateAppointmentStatus = async (
   appointmentId: string,
   status: Appointment['status'],
   doctorNotes?: string,
   patientId?: string
 ): Promise<void> => {
-  // Update in global memory store
-  const target = GLOBAL_APPOINTMENTS_STORE.find((a) => a.id === appointmentId);
-  if (target) {
-    target.status = status;
-    if (doctorNotes) target.doctorNotes = doctorNotes;
-    target.updatedAt = new Date().toISOString();
-  }
-
   try {
-    await updateDoc(doc(db, 'appointments', appointmentId), {
+    await api.put(`/api/appointments/${appointmentId}/status`, {
       status,
-      doctorNotes: doctorNotes || '',
-      updatedAt: serverTimestamp(),
+      notes: doctorNotes,
     });
   } catch (err) {
-    console.warn('updateAppointmentStatus firestore update fallback:', err);
+    console.warn('updateAppointmentStatus api call error:', err);
   }
 
-  if (patientId || target?.patientId) {
-    const pId = patientId || target?.patientId || '';
-    await createNotification({
-      userId: pId,
-      title: `Appointment ${status === 'confirmed' ? 'CONFIRMED' : status.toUpperCase()}`,
-      message: `Your consultation on ${target?.date || 'scheduled date'} has been ${status}.${doctorNotes ? ` Note: ${doctorNotes}` : ''}`,
-      category: 'appointment',
-      priority: status === 'confirmed' ? 'high' : 'normal',
-    });
+  if (patientId) {
+    try {
+      await createNotification({
+        userId: patientId,
+        title: `Appointment ${status === 'confirmed' ? 'CONFIRMED' : status.toUpperCase()}`,
+        message: `Your consultation status has been updated to ${status}.${doctorNotes ? ` Note: ${doctorNotes}` : ''}`,
+        category: 'appointment',
+        priority: status === 'confirmed' ? 'high' : 'normal',
+      });
+    } catch {
+      // ignore notification errors
+    }
   }
 };

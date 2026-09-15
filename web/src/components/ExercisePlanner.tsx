@@ -14,6 +14,8 @@ import {
   MenuItem,
   CircularProgress,
   LinearProgress,
+  Alert,
+  Snackbar,
 } from '@mui/material';
 import {
   FitnessCenter,
@@ -33,10 +35,11 @@ import {
 } from '@mui/icons-material';
 import {
   ExercisePlan,
-  ExerciseActivityLog,
+  ExerciseItem,
+  ExerciseProgressLog,
   fetchPatientExercisePlan,
-  fetchExerciseLogs,
-  logExerciseActivity,
+  logExerciseProgress,
+  createBackendExercisePlan,
   generateAIExercisePlan,
   generateVitalsBasedSuggestions,
   VitalsSuggestion,
@@ -48,6 +51,7 @@ interface ExercisePlannerProps {
   patientName?: string;
   chronicConditions?: string;
   vitals?: VitalReading[];
+  onPlanUpdate?: (plan: ExercisePlan | null) => void;
 }
 
 export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
@@ -55,33 +59,39 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
   patientName,
   chronicConditions,
   vitals = [],
+  onPlanUpdate,
 }) => {
   const [plan, setPlan] = useState<ExercisePlan | null>(null);
-  const [logs, setLogs] = useState<ExerciseActivityLog[]>([]);
+  const [logs, setLogs] = useState<ExerciseProgressLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [openLogModal, setOpenLogModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [suggestions, setSuggestions] = useState<VitalsSuggestion[]>([]);
+  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form state
   const [actName, setActName] = useState('');
-  const [category, setCategory] = useState<ExerciseActivityLog['category']>('Cardio');
-  const [duration, setDuration] = useState('');
-  const [calories, setCalories] = useState('');
-  const [intensity, setIntensity] = useState<ExerciseActivityLog['intensity']>('Moderate');
+  const [category, setCategory] = useState<string>('Cardio');
+  const [duration, setDuration] = useState('30');
+  const [calories, setCalories] = useState('120');
+  const [intensity, setIntensity] = useState<string>('Moderate');
   const [avgHr, setAvgHr] = useState('');
   const [notes, setNotes] = useState('');
 
   const loadData = async () => {
+    if (!patientId) return;
     setLoading(true);
     try {
-      const [p, l] = await Promise.all([
-        fetchPatientExercisePlan(patientId),
-        fetchExerciseLogs(patientId),
-      ]);
+      // Fetch plan from GET /api/exercise-plans/:patientId via exerciseService
+      const p = await fetchPatientExercisePlan(patientId);
       setPlan(p);
-      setLogs(l);
+      setLogs(p?.progressLog || []);
+      if (onPlanUpdate) {
+        onPlanUpdate(p);
+      }
+    } catch (err: any) {
+      console.warn('Error loading exercise plan:', err);
     } finally {
       setLoading(false);
     }
@@ -102,10 +112,22 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
       const latestVital = vitals.length > 0 ? vitals[vitals.length - 1] : null;
       const newPlan = await generateAIExercisePlan(patientId, {
         name: patientName,
-        chronicConditions: chronicConditions || (latestVital ? `Systolic BP: ${latestVital.systolicBP}, HR: ${latestVital.heartRate}` : 'General Wellness'),
+        chronicConditions:
+          chronicConditions ||
+          (latestVital ? `Systolic BP: ${latestVital.systolicBP}, HR: ${latestVital.heartRate}` : 'General Wellness'),
         bloodPressure: latestVital ? `${latestVital.systolicBP}/${latestVital.diastolicBP} mmHg` : undefined,
       });
-      if (newPlan) setPlan(newPlan);
+
+      if (newPlan) {
+        setPlan(newPlan);
+        setLogs(newPlan.progressLog || []);
+        if (onPlanUpdate) onPlanUpdate(newPlan);
+        setFeedbackMsg({ type: 'success', text: 'AI Exercise Plan generated and saved successfully!' });
+      } else {
+        setFeedbackMsg({ type: 'error', text: 'Could not generate AI exercise plan. Please try again.' });
+      }
+    } catch (err: any) {
+      setFeedbackMsg({ type: 'error', text: err.message || 'Error generating AI plan' });
     } finally {
       setGeneratingAI(false);
     }
@@ -115,32 +137,106 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
     if (!actName.trim() || !duration) return;
     setSubmitting(true);
     try {
-      await logExerciseActivity({
-        patientId,
-        date: new Date().toISOString().split('T')[0],
+      let activePlanId = plan?._id || plan?.id;
+
+      // If no exercise plan exists yet for this patient, create an initial plan via POST /api/exercise-plans
+      if (!activePlanId) {
+        const initialPlan = await createBackendExercisePlan({
+          patientId,
+          frequency: '3-5 days/week',
+          exercises: [
+            {
+              name: actName.trim(),
+              notes: `${category} · ${intensity} intensity · ${duration} min`,
+            },
+          ],
+        });
+        if (initialPlan) {
+          activePlanId = initialPlan._id || initialPlan.id;
+          setPlan(initialPlan);
+        }
+      }
+
+      // Log progress via PUT /api/exercise-plans/:id/progress
+      const targetId = activePlanId || patientId;
+      const result = await logExerciseProgress(targetId, {
+        date: new Date().toISOString(),
+        completed: true,
         activityName: actName.trim(),
         category,
         durationMinutes: Number(duration) || 30,
         caloriesBurned: Number(calories) || 100,
         intensity,
         averageHeartRate: Number(avgHr) || undefined,
-        completed: true,
         notes: notes.trim() || undefined,
       });
+
+      if (result.success && result.exercisePlan) {
+        setPlan(result.exercisePlan);
+        setLogs(result.exercisePlan.progressLog || []);
+        if (onPlanUpdate) onPlanUpdate(result.exercisePlan);
+      } else {
+        // Fallback: reload from GET /api/exercise-plans/:patientId
+        await loadData();
+      }
+
+      setFeedbackMsg({ type: 'success', text: 'Workout progress logged successfully!' });
       setOpenLogModal(false);
-      await loadData();
+      // Reset modal fields
+      setActName('');
+      setNotes('');
+      setAvgHr('');
+    } catch (err: any) {
+      console.error('Error logging workout progress:', err);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || err.message || 'Failed to log workout progress',
+      });
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Calculate total weekly minutes completed
-  const totalMinutesCompleted = logs.reduce((acc, l) => acc + l.durationMinutes, 0);
+  // Extract exercise routines list from plan
+  const exerciseList: ExerciseItem[] =
+    plan?.exercises && plan.exercises.length > 0
+      ? plan.exercises
+      : plan?.routines && plan.routines.length > 0
+      ? plan.routines
+      : [];
+
+  // Calculate weekly minutes completed from progressLog
+  const totalMinutesCompleted = logs.reduce((acc, l) => {
+    if (l.durationMinutes && l.durationMinutes > 0) {
+      return acc + l.durationMinutes;
+    }
+    const match = l.notes?.match(/Duration:\s*(\d+)\s*min/i) || l.notes?.match(/(\d+)\s*min/i);
+    return acc + (match ? Number(match[1]) : 30);
+  }, 0);
+
   const targetMinutes = plan?.weeklyTargetMinutes || 150;
   const progressPercent = Math.min(100, Math.round((totalMinutesCompleted / targetMinutes) * 100));
 
   return (
     <Box display="flex" flexDirection="column" gap={3}>
+      {/* ── Feedback Notification ────────────────────────────────────────────── */}
+      <Snackbar
+        open={Boolean(feedbackMsg)}
+        autoHideDuration={4000}
+        onClose={() => setFeedbackMsg(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        {feedbackMsg ? (
+          <Alert
+            onClose={() => setFeedbackMsg(null)}
+            severity={feedbackMsg.type}
+            sx={{ width: '100%', borderRadius: '10px' }}
+          >
+            {feedbackMsg.text}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
+
       {/* ── Header Banner ────────────────────────────────────────────────────── */}
       <Paper
         elevation={0}
@@ -196,7 +292,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                   '&:hover': { borderColor: '#fff', backgroundColor: 'rgba(255,255,255,0.1)' },
                 }}
               >
-                Regenerate AI Plan
+                {generatingAI ? 'Generating Plan...' : 'Regenerate AI Plan'}
               </Button>
             </Box>
           </Grid>
@@ -231,10 +327,12 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
               />
               <Box display="flex" justifyContent="space-between" mt={1}>
                 <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.72rem' }}>
-                  {progressPercent}% of weekly guideline reached
+                  {progressPercent}% of weekly guideline reached ({logs.length} session{logs.length === 1 ? '' : 's'})
                 </Typography>
                 <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.9)', fontWeight: 700, fontSize: '0.72rem' }}>
-                  {targetMinutes - totalMinutesCompleted > 0 ? `${targetMinutes - totalMinutesCompleted} min remaining` : 'Goal achieved!'}
+                  {targetMinutes - totalMinutesCompleted > 0
+                    ? `${targetMinutes - totalMinutesCompleted} min remaining`
+                    : 'Goal achieved!'}
                 </Typography>
               </Box>
             </Paper>
@@ -242,8 +340,15 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
         </Grid>
       </Paper>
 
+      {/* ── Loading Spinner ─────────────────────────────────────────────────── */}
+      {loading && (
+        <Box display="flex" justifyContent="center" py={4}>
+          <CircularProgress size={32} sx={{ color: '#059669' }} />
+        </Box>
+      )}
+
       {/* ── Vitals-Based Smart Suggestions ──────────────────────────────────── */}
-      {suggestions.length > 0 && !plan && (
+      {suggestions.length > 0 && !plan && !loading && (
         <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
           <Box display="flex" alignItems="center" gap={1.5} mb={0.5}>
             <TrendingUp sx={{ color: '#1565C0', fontSize: 22 }} />
@@ -253,7 +358,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
             <Chip label="PERSONALISED" size="small" sx={{ backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 800, fontSize: '0.65rem' }} />
           </Box>
           <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
-            These recommendations are derived from your logged vitals. Add an AI plan for a full weekly prescription.
+            These recommendations are derived from your logged vitals. Generate an AI plan to save a full weekly prescription.
           </Typography>
 
           <Grid container spacing={2}>
@@ -366,10 +471,10 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
         >
           <FitnessCenter sx={{ fontSize: 48, color: '#CBD5E1', mb: 2 }} />
           <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#94A3B8', mb: 1 }}>
-            No Exercise Plan Yet
+            No Exercise Plan Found
           </Typography>
           <Typography variant="body2" sx={{ color: '#94A3B8', mb: 3, maxWidth: 480, mx: 'auto' }}>
-            Log your vitals (blood pressure, heart rate, glucose) in the <strong>Health Trends & Vitals</strong> tab to get personalized exercise suggestions tailored to your health readings.
+            No clinical exercise plan has been assigned yet. You can generate an AI-customized routine adapted to your health status or log individual workouts.
           </Typography>
           <Button
             variant="contained"
@@ -395,156 +500,220 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
             <Box>
               <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B' }}>
-                {plan.title}
+                {plan.title || 'Prescribed Physical Conditioning'}
               </Typography>
               <Typography variant="caption" sx={{ color: '#64748B' }}>
-                Prescribed by: {plan.prescribedBy || 'Clinical Health Engine'} · Focus: {plan.conditionFocus || 'Cardiometabolic'}
+                Prescribed by: {plan.prescribedBy || 'Clinical Health Engine'} · Schedule: {plan.frequency || 'Weekly Schedule'}
               </Typography>
             </Box>
-            <Chip label="CLINICAL GUIDELINE" size="small" sx={{ backgroundColor: '#ECFDF5', color: '#059669', fontWeight: 800, fontSize: '0.68rem' }} />
+            <Chip
+              label="SYNCHRONIZED API"
+              size="small"
+              sx={{ backgroundColor: '#ECFDF5', color: '#059669', fontWeight: 800, fontSize: '0.68rem' }}
+            />
           </Box>
 
-          <Grid container spacing={2}>
-            {plan.routines.map((routine) => (
-              <Grid item xs={12} md={4} key={routine.id}>
-                <Paper
-                  elevation={0}
-                  sx={{
-                    p: 2.5,
-                    borderRadius: '16px',
-                    border: '1px solid #E2E8F0',
-                    backgroundColor: '#F8FAFC',
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <Box>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Chip
-                        label={routine.category}
-                        size="small"
-                        sx={{ backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 700, fontSize: '0.68rem' }}
-                      />
-                      <Box display="flex" alignItems="center" gap={0.5}>
-                        <Timer sx={{ fontSize: 14, color: '#64748B' }} />
-                        <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>
-                          {routine.durationMinutes} min ({routine.frequency})
-                        </Typography>
+          {exerciseList.length === 0 ? (
+            <Box py={2} textAlign="center">
+              <Typography variant="body2" sx={{ color: '#94A3B8' }}>
+                No specific exercises listed under this plan. Use "Log Workout" to track activity.
+              </Typography>
+            </Box>
+          ) : (
+            <Grid container spacing={2}>
+              {exerciseList.map((routine, idx) => (
+                <Grid item xs={12} sm={6} md={4} key={routine._id || routine.id || idx}>
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 2.5,
+                      borderRadius: '16px',
+                      border: '1px solid #E2E8F0',
+                      backgroundColor: '#F8FAFC',
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Box>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                        <Chip
+                          label={routine.category || 'Exercise'}
+                          size="small"
+                          sx={{ backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 700, fontSize: '0.68rem' }}
+                        />
+                        {(routine.durationMinutes || routine.frequency) && (
+                          <Box display="flex" alignItems="center" gap={0.5}>
+                            <Timer sx={{ fontSize: 14, color: '#64748B' }} />
+                            <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700 }}>
+                              {routine.durationMinutes ? `${routine.durationMinutes} min` : ''}
+                              {routine.frequency ? ` (${routine.frequency})` : ''}
+                            </Typography>
+                          </Box>
+                        )}
                       </Box>
+
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B', mb: 0.5 }}>
+                        {routine.name}
+                      </Typography>
+
+                      {(routine.sets || routine.reps) && (
+                        <Typography variant="caption" sx={{ color: '#059669', fontWeight: 700, display: 'block', mb: 1 }}>
+                          {routine.sets ? `${routine.sets} sets` : ''} {routine.reps ? `· ${routine.reps} reps` : ''}
+                        </Typography>
+                      )}
+
+                      {(routine.instructions || routine.notes) && (
+                        <Typography variant="body2" sx={{ color: '#475569', fontSize: '0.78rem', mb: 1.5, lineHeight: 1.4 }}>
+                          {routine.instructions || routine.notes}
+                        </Typography>
+                      )}
+
+                      {routine.targetHeartRate && (
+                        <Box display="flex" alignItems="center" gap={0.5} mb={1}>
+                          <Favorite sx={{ fontSize: 14, color: '#DC2626' }} />
+                          <Typography variant="caption" sx={{ color: '#DC2626', fontWeight: 700 }}>
+                            Target Zone: {routine.targetHeartRate}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {routine.benefits && (
+                        <Box sx={{ p: 1, borderRadius: '8px', backgroundColor: '#ECFDF5', mb: 1.5 }}>
+                          <Typography variant="caption" sx={{ color: '#065F46', fontWeight: 600, display: 'block', fontSize: '0.72rem' }}>
+                            🌱 <strong>Benefit:</strong> {routine.benefits}
+                          </Typography>
+                        </Box>
+                      )}
                     </Box>
 
-                    <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B', mb: 0.5 }}>
-                      {routine.name}
-                    </Typography>
-
-                    <Typography variant="body2" sx={{ color: '#475569', fontSize: '0.78rem', mb: 1.5, lineHeight: 1.4 }}>
-                      {routine.instructions}
-                    </Typography>
-
-                    {routine.targetHeartRate && (
-                      <Box display="flex" alignItems="center" gap={0.5} mb={1}>
-                        <Favorite sx={{ fontSize: 14, color: '#DC2626' }} />
-                        <Typography variant="caption" sx={{ color: '#DC2626', fontWeight: 700 }}>
-                          Target Zone: {routine.targetHeartRate}
+                    {routine.precautions && routine.precautions.length > 0 && (
+                      <Box sx={{ borderTop: '1px solid #E2E8F0', pt: 1, mt: 1 }}>
+                        <Typography variant="caption" sx={{ color: '#94A3B8', fontSize: '0.68rem', display: 'block' }}>
+                          ⚠️ Precautions: {routine.precautions.join(' · ')}
                         </Typography>
                       </Box>
                     )}
-
-                    <Box sx={{ p: 1, borderRadius: '8px', backgroundColor: '#ECFDF5', mb: 1.5 }}>
-                      <Typography variant="caption" sx={{ color: '#065F46', fontWeight: 600, display: 'block', fontSize: '0.72rem' }}>
-                        🌱 <strong>Benefit:</strong> {routine.benefits}
-                      </Typography>
-                    </Box>
-                  </Box>
-
-                  {routine.precautions && routine.precautions.length > 0 && (
-                    <Box sx={{ borderTop: '1px solid #E2E8F0', pt: 1, mt: 1 }}>
-                      <Typography variant="caption" sx={{ color: '#94A3B8', fontSize: '0.68rem', display: 'block' }}>
-                        ⚠️ Precautions: {routine.precautions.join(' · ')}
-                      </Typography>
-                    </Box>
-                  )}
-                </Paper>
-              </Grid>
-            ))}
-          </Grid>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          )}
         </Paper>
       )}
 
       {/* ── Recent Activity Logs ──────────────────────────────────────────────── */}
       <Paper elevation={0} sx={{ p: 3, borderRadius: '20px', border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
-        <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B', mb: 2 }}>
-          Recent Workout & Activity Logs
-        </Typography>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#1E293B' }}>
+            Recent Workout & Activity Logs
+          </Typography>
+          <Chip
+            label={`${logs.length} Recorded`}
+            size="small"
+            sx={{ backgroundColor: '#F1F5F9', color: '#475569', fontWeight: 700 }}
+          />
+        </Box>
 
         <Box display="flex" flexDirection="column" gap={1.5}>
           {logs.length === 0 ? (
             <Box textAlign="center" py={3}>
               <DirectionsRun sx={{ fontSize: 36, color: '#CBD5E1', mb: 1 }} />
-              <Typography variant="body2" sx={{ color: '#94A3B8', fontWeight: 600 }}>No workouts logged yet</Typography>
-              <Typography variant="caption" sx={{ color: '#CBD5E1' }}>Click "Log Workout" to track your first activity</Typography>
+              <Typography variant="body2" sx={{ color: '#94A3B8', fontWeight: 600 }}>
+                No workouts logged yet
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#CBD5E1' }}>
+                Click "Log Workout" to record your completed session to the database
+              </Typography>
             </Box>
           ) : (
-          logs.map((log) => (
-            <Paper
-              key={log.id}
-              elevation={0}
-              sx={{
-                p: 2,
-                borderRadius: '12px',
-                border: '1px solid #E2E8F0',
-                backgroundColor: '#F8FAFC',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: 1,
-              }}
-            >
-              <Box display="flex" alignItems="center" gap={1.5}>
-                <Box
+            [...logs].reverse().map((log, idx) => {
+              const formattedDate = log.date
+                ? new Date(log.date).toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })
+                : 'Recent Session';
+
+              return (
+                <Paper
+                  key={log._id || log.id || idx}
+                  elevation={0}
                   sx={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: '50%',
-                    backgroundColor: '#ECFDF5',
-                    color: '#059669',
+                    p: 2,
+                    borderRadius: '12px',
+                    border: '1px solid #E2E8F0',
+                    backgroundColor: '#F8FAFC',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 1.5,
                   }}
                 >
-                  <DirectionsRun sx={{ fontSize: 20 }} />
-                </Box>
-                <Box>
-                  <Typography variant="body2" sx={{ fontWeight: 800, color: '#1E293B' }}>
-                    {log.activityName}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: '#64748B' }}>
-                    {log.date} · {log.category} · {log.intensity} intensity
-                  </Typography>
-                </Box>
-              </Box>
+                  <Box display="flex" alignItems="center" gap={1.5}>
+                    <Box
+                      sx={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: '50%',
+                        backgroundColor: '#ECFDF5',
+                        color: '#059669',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <DirectionsRun sx={{ fontSize: 20 }} />
+                    </Box>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                        {log.activityName || log.notes || 'Exercise Session'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#64748B' }}>
+                        {formattedDate} {log.completed ? '· Completed' : ''}
+                      </Typography>
+                    </Box>
+                  </Box>
 
-              <Box display="flex" alignItems="center" gap={2}>
-                <Box display="flex" alignItems="center" gap={0.5}>
-                  <Timer sx={{ fontSize: 16, color: '#1565C0' }} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1565C0' }}>
-                    {log.durationMinutes} min
-                  </Typography>
-                </Box>
+                  <Box display="flex" alignItems="center" gap={2}>
+                    {log.durationMinutes ? (
+                      <Box display="flex" alignItems="center" gap={0.5}>
+                        <Timer sx={{ fontSize: 16, color: '#1565C0' }} />
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1565C0' }}>
+                          {log.durationMinutes} min
+                        </Typography>
+                      </Box>
+                    ) : null}
 
-                <Box display="flex" alignItems="center" gap={0.5}>
-                  <LocalFireDepartment sx={{ fontSize: 16, color: '#D97706' }} />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#D97706' }}>
-                    {log.caloriesBurned} kcal
-                  </Typography>
-                </Box>
-              </Box>
-            </Paper>
-          ))
+                    {log.caloriesBurned ? (
+                      <Box display="flex" alignItems="center" gap={0.5}>
+                        <LocalFireDepartment sx={{ fontSize: 16, color: '#D97706' }} />
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#D97706' }}>
+                          {log.caloriesBurned} kcal
+                        </Typography>
+                      </Box>
+                    ) : null}
+
+                    <Chip
+                      icon={<CheckCircle sx={{ fontSize: '14px !important' }} />}
+                      label="Logged"
+                      size="small"
+                      sx={{
+                        backgroundColor: '#ECFDF5',
+                        color: '#059669',
+                        fontWeight: 700,
+                        fontSize: '0.68rem',
+                      }}
+                    />
+                  </Box>
+                </Paper>
+              );
+            })
           )}
         </Box>
       </Paper>
@@ -554,7 +723,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
         <DialogTitle sx={{ fontWeight: 800, color: '#1E293B' }}>Log Physical Workout</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
-            Track duration, calories, and intensity to maintain weekly cardiovascular targets.
+            Saves progress directly to your active plan via <code>PUT /api/exercise-plans/:id/progress</code>.
           </Typography>
 
           <Grid container spacing={2}>
@@ -564,6 +733,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                 fullWidth
                 value={actName}
                 onChange={(e) => setActName(e.target.value)}
+                placeholder={exerciseList[0]?.name || 'e.g. Brisk Walking, Chair Squats'}
                 size="small"
                 required
               />
@@ -575,7 +745,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                 label="Category"
                 fullWidth
                 value={category}
-                onChange={(e) => setCategory(e.target.value as any)}
+                onChange={(e) => setCategory(e.target.value)}
                 size="small"
               >
                 <MenuItem value="Cardio">Cardio</MenuItem>
@@ -615,7 +785,7 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                 label="Intensity"
                 fullWidth
                 value={intensity}
-                onChange={(e) => setIntensity(e.target.value as any)}
+                onChange={(e) => setIntensity(e.target.value)}
                 size="small"
               >
                 <MenuItem value="Light">Light (Easy Breathing)</MenuItem>
@@ -643,14 +813,16 @@ export const ExercisePlanner: React.FC<ExercisePlannerProps> = ({
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Good energy, completed full distance without fatigue."
+                placeholder="e.g. Good energy, completed full session comfortably."
                 size="small"
               />
             </Grid>
           </Grid>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={() => setOpenLogModal(false)} sx={{ borderRadius: '999px', fontWeight: 600 }}>Cancel</Button>
+          <Button onClick={() => setOpenLogModal(false)} sx={{ borderRadius: '999px', fontWeight: 600 }}>
+            Cancel
+          </Button>
           <Button
             variant="contained"
             onClick={handleLogActivity}

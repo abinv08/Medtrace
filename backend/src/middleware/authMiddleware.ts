@@ -32,3 +32,43 @@ export const authenticateJWT = (
     res.status(403).json({ success: false, message: 'Invalid or expired access token' });
   }
 };
+
+export const requireRole = (...allowedRoles: string[]) => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+    if (!req.user || !req.user.role) {
+      res.status(403).json({
+        success: false,
+        message: 'Access denied: role not specified in authentication token',
+      });
+      return;
+    }
+
+    const normalize = (r: string) => r.toLowerCase().replace(/[\s_-]+/g, '');
+    const userRoleNormalized = normalize(req.user.role);
+
+    const isAuthorized = allowedRoles.some((role) => {
+      const allowedNormalized = normalize(role);
+      return (
+        userRoleNormalized === allowedNormalized ||
+        req.user?.role.toLowerCase() === role.toLowerCase()
+      );
+    });
+
+    if (!isAuthorized) {
+      res.status(403).json({
+        success: false,
+        message: `Access denied: requires one of the following roles: [${allowedRoles.join(', ')}]`,
+      });
+      return;
+    }
+
+    next();
+  };
+};
+
+export const requireHospitalAdmin = requireRole(
+  'hospital_admin',
+  'Hospital Administrator',
+  'admin'
+);
+

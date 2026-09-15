@@ -1,9 +1,10 @@
 import axios from 'axios';
 
-export const API_BASE_URL = 'http://localhost:5000/api/auth';
+export const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:5000';
+export const API_BASE_URL = `${BACKEND_URL}/api`;
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: BACKEND_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -12,7 +13,7 @@ const api = axios.create({
 
 // Interceptor to attach access token to requests
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('medtrace_access_token');
+  const token = localStorage.getItem('medtrace_access_token') || localStorage.getItem('token');
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -27,7 +28,11 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
-        const refreshResponse = await axios.post(`${API_BASE_URL}/refresh-token`, {}, { withCredentials: true });
+        const refreshResponse = await axios.post(
+          `${BACKEND_URL}/api/auth/refresh-token`,
+          {},
+          { withCredentials: true }
+        );
         if (refreshResponse.data.accessToken) {
           localStorage.setItem('medtrace_access_token', refreshResponse.data.accessToken);
           originalRequest.headers.Authorization = `Bearer ${refreshResponse.data.accessToken}`;

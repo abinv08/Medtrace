@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -30,6 +30,8 @@ import {
   MedicalServices,
   Edit,
 } from '@mui/icons-material';
+import api from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import {
   MedicationItem,
   MedicationDoseLog,
@@ -52,6 +54,7 @@ export const MedicationTracker: React.FC<MedicationTrackerProps> = ({
   patientId,
   onAdherenceChange,
 }) => {
+  const { token, getToken } = useAuth();
   const [medications, setMedications] = useState<MedicationItem[]>([]);
   const [doseLogs, setDoseLogs] = useState<MedicationDoseLog[]>([]);
   const [adherenceScore, setAdherenceScore] = useState(92);
@@ -70,26 +73,128 @@ export const MedicationTracker: React.FC<MedicationTrackerProps> = ({
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  const loadData = async () => {
+  // ── Fetch real medications from GET /api/medications/:patientId ─────────────
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [meds, logs, score] = await Promise.all([
-        fetchPatientMedications(patientId),
-        fetchDoseLogs(patientId, todayStr),
-        calculateAdherenceRate(patientId),
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        try {
+          authToken = await getToken();
+        } catch {
+          /* ignore */
+        }
+      }
+      const authHeaders: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+      // 1. Fetch from GET /api/medications/:patientId
+      let backendMeds: any[] = [];
+      try {
+        const res = await api.get(`/api/medications/${patientId}`, { headers: authHeaders });
+        if (res.data?.success && Array.isArray(res.data.medications)) {
+          backendMeds = res.data.medications;
+        }
+      } catch (apiErr: any) {
+        console.warn(`GET /api/medications/${patientId} error, using fallback:`, apiErr.message);
+      }
+
+      let loadedMeds: MedicationItem[] = [];
+      const backendLogs: MedicationDoseLog[] = [];
+
+      if (backendMeds.length > 0) {
+        loadedMeds = backendMeds.map((m: any) => {
+          const id = m._id ? String(m._id) : String(m.id || `med-${Date.now()}`);
+          let slots: ('Morning' | 'Afternoon' | 'Evening' | 'Night')[] = ['Morning'];
+          if (Array.isArray(m.timeSlots) && m.timeSlots.length > 0) {
+            slots = m.timeSlots;
+          } else {
+            const fLower = (m.frequency || '').toLowerCase();
+            if (fLower.includes('twice')) slots = ['Morning', 'Evening'];
+            else if (fLower.includes('three') || fLower.includes('thrice')) slots = ['Morning', 'Afternoon', 'Evening'];
+            else if (fLower.includes('four')) slots = ['Morning', 'Afternoon', 'Evening', 'Night'];
+            else if (fLower.includes('night') || fLower.includes('bed')) slots = ['Night'];
+            else if (fLower.includes('afternoon')) slots = ['Afternoon'];
+            else if (fLower.includes('evening')) slots = ['Evening'];
+            else slots = ['Morning'];
+          }
+
+          const docName =
+            typeof m.prescribedBy === 'object' && m.prescribedBy?.name
+              ? m.prescribedBy.name
+              : typeof m.prescribedBy === 'string'
+              ? m.prescribedBy
+              : 'Attending Physician';
+
+          // Collect today's dose log entries from backend takenLog
+          if (Array.isArray(m.takenLog)) {
+            m.takenLog.forEach((tl: any) => {
+              const logDate = tl.date ? new Date(tl.date).toISOString().split('T')[0] : '';
+              if (logDate === todayStr) {
+                slots.forEach((s) => {
+                  backendLogs.push({
+                    id: `log-${id}-${s}`,
+                    patientId,
+                    medicationId: id,
+                    medicationName: m.name,
+                    date: todayStr,
+                    timeSlot: s,
+                    status: tl.taken ? 'taken' : 'skipped',
+                    loggedAt: tl.date,
+                  });
+                });
+              }
+            });
+          }
+
+          return {
+            id,
+            patientId: m.patientId || patientId,
+            name: m.name,
+            dosage: m.dosage || 'As directed',
+            frequency: (m.frequency as any) || 'Once Daily',
+            timeSlots: slots,
+            prescribingDoctor: docName,
+            instructions: m.instructions || 'Take as directed by your physician.',
+            status: m.status || 'active',
+            startDate: m.startDate ? String(m.startDate).split('T')[0] : todayStr,
+            endDate: m.endDate ? String(m.endDate).split('T')[0] : undefined,
+            category: m.category || 'Cardiovascular',
+            refillsRemaining: m.refillsRemaining ?? 3,
+            createdAt: m.createdAt,
+            updatedAt: m.updatedAt,
+          };
+        });
+      } else {
+        // Fallback to existing mock / Firestore service
+        loadedMeds = await fetchPatientMedications(patientId).catch(() => []);
+      }
+
+      setMedications(loadedMeds);
+
+      // Fetch / merge dose logs
+      const [serviceLogs, score] = await Promise.all([
+        fetchDoseLogs(patientId, todayStr).catch(() => []),
+        calculateAdherenceRate(patientId).catch(() => 92),
       ]);
-      setMedications(meds);
-      setDoseLogs(logs);
+
+      const combinedLogs = [...serviceLogs];
+      backendLogs.forEach((bl) => {
+        if (!combinedLogs.some((cl) => cl.medicationId === bl.medicationId && cl.timeSlot === bl.timeSlot)) {
+          combinedLogs.push(bl);
+        }
+      });
+
+      setDoseLogs(combinedLogs);
       setAdherenceScore(score);
       if (onAdherenceChange) onAdherenceChange(score);
     } finally {
       setLoading(false);
     }
-  };
+  }, [patientId, todayStr, token, getToken, onAdherenceChange]);
 
   useEffect(() => {
     loadData();
-  }, [patientId, todayStr]);
+  }, [loadData]);
 
   const handleToggleSlot = (slot: 'Morning' | 'Afternoon' | 'Evening' | 'Night') => {
     if (selectedSlots.includes(slot)) {
@@ -99,23 +204,48 @@ export const MedicationTracker: React.FC<MedicationTrackerProps> = ({
     }
   };
 
+  // ── Support adding medication via POST /api/medications ─────────────────────
   const handleAddMedication = async () => {
     if (!medName.trim() || !dosage.trim()) return;
     setSubmitting(true);
     try {
-      await addMedication({
+      let authToken = token;
+      if (!authToken && typeof getToken === 'function') {
+        try {
+          authToken = await getToken();
+        } catch {
+          /* ignore */
+        }
+      }
+      const authHeaders: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+      const finalSlots: ('Morning' | 'Afternoon' | 'Evening' | 'Night')[] =
+        selectedSlots.length > 0 ? selectedSlots : ['Morning'];
+
+      const payload: Omit<MedicationItem, 'id' | 'createdAt' | 'updatedAt'> = {
         patientId,
         name: medName.trim(),
         dosage: dosage.trim(),
         frequency,
-        timeSlots: selectedSlots.length ? selectedSlots : ['Morning'],
+        timeSlots: finalSlots,
         prescribingDoctor,
         instructions: instructions.trim() || 'Take as directed by your physician.',
         status: 'active',
         startDate: todayStr,
         category,
         refillsRemaining: 3,
-      });
+      };
+
+      try {
+        await api.post('/api/medications', payload, { headers: authHeaders });
+      } catch (err: any) {
+        console.warn('POST /api/medications error, syncing with local service:', err.message);
+        await addMedication(payload).catch(() => null);
+      }
+
+      // Keep local service in sync as well
+      await addMedication(payload).catch(() => null);
+
       setOpenAddModal(false);
       setMedName('');
       setDosage('');
@@ -126,16 +256,58 @@ export const MedicationTracker: React.FC<MedicationTrackerProps> = ({
     }
   };
 
+  // ── Delete medication via DELETE /api/medications/:id ───────────────────────
   const handleDelete = async (id: string) => {
-    await deleteMedication(id, patientId);
+    let authToken = token;
+    if (!authToken && typeof getToken === 'function') {
+      try {
+        authToken = await getToken();
+      } catch {
+        /* ignore */
+      }
+    }
+    const authHeaders: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+    try {
+      await api.delete(`/api/medications/${id}`, { headers: authHeaders });
+    } catch (err: any) {
+      console.warn(`DELETE /api/medications/${id} error:`, err.message);
+    }
+    await deleteMedication(id, patientId).catch(() => null);
     await loadData();
   };
 
+  // ── Mark-as-taken via POST /api/medications/:id/taken ───────────────────────
   const handleDoseAction = async (
     med: MedicationItem,
     slot: 'Morning' | 'Afternoon' | 'Evening' | 'Night',
     status: 'taken' | 'skipped'
   ) => {
+    let authToken = token;
+    if (!authToken && typeof getToken === 'function') {
+      try {
+        authToken = await getToken();
+      } catch {
+        /* ignore */
+      }
+    }
+    const authHeaders: Record<string, string> = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
+    // 1. Call backend endpoint: POST /api/medications/:id/taken
+    try {
+      await api.post(
+        `/api/medications/${med.id}/taken`,
+        {
+          date: todayStr,
+          taken: status === 'taken',
+        },
+        { headers: authHeaders }
+      );
+    } catch (err: any) {
+      console.warn(`POST /api/medications/${med.id}/taken error:`, err.message);
+    }
+
+    // 2. Also log in local/Firestore service for time slot & compliance tracking
     await logDoseAdherence({
       patientId,
       medicationId: med.id,
@@ -143,12 +315,27 @@ export const MedicationTracker: React.FC<MedicationTrackerProps> = ({
       date: todayStr,
       timeSlot: slot,
       status,
+    }).catch(() => null);
+
+    // Optimistically update local dose log state
+    setDoseLogs((prev) => {
+      const filtered = prev.filter((l) => !(l.medicationId === med.id && l.timeSlot === slot));
+      return [
+        ...filtered,
+        {
+          id: `log-${med.id}-${slot}-${Date.now()}`,
+          patientId,
+          medicationId: med.id,
+          medicationName: med.name,
+          date: todayStr,
+          timeSlot: slot,
+          status,
+          loggedAt: new Date().toISOString(),
+        },
+      ];
     });
-    const [newLogs, score] = await Promise.all([
-      fetchDoseLogs(patientId, todayStr),
-      calculateAdherenceRate(patientId),
-    ]);
-    setDoseLogs(newLogs);
+
+    const score = await calculateAdherenceRate(patientId).catch(() => 92);
     setAdherenceScore(score);
     if (onAdherenceChange) onAdherenceChange(score);
   };

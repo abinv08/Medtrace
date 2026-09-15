@@ -59,41 +59,43 @@ const readFileAsBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+// ─── Generative AI Helper with Fallbacks ──────────────────────────────────────
+export async function getWorkingGenerativeModel<T>(
+  genAI: GoogleGenerativeAI,
+  execute: (model: ReturnType<GoogleGenerativeAI['getGenerativeModel']>) => Promise<T>
+): Promise<T> {
+  const primaryModel = (import.meta.env.VITE_GEMINI_MODEL as string | undefined) || 'gemini-3.6-flash';
+  const modelsToTry = [
+    primaryModel,        // gemini-3.6-flash (stable, current default)
+    'gemini-3.5-flash',  // prior stable gen, still fully supported
+    'gemini-3.1-flash-lite', // lighter/cheaper stable fallback
+  ].filter((m, i, self) => self.indexOf(m) === i);
+
+  let lastError: any;
+  for (const modelName of modelsToTry) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      return await execute(model);
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Gemini model ${modelName} failed, trying fallback:`, err?.message || err);
+    }
+  }
+  throw lastError;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 export const analyzeReport = async (file: File): Promise<ReportSummary> => {
   const genAI = getClient();
-  const primaryModel = (import.meta.env.VITE_GEMINI_MODEL as string | undefined) || 'gemini-3.6-flash';
-
   const base64 = await readFileAsBase64(file);
   const mimeType = file.type as string;
 
-  let result;
-  try {
-    const model = genAI.getGenerativeModel({ model: primaryModel });
-    result = await model.generateContent([
+  const result = await getWorkingGenerativeModel(genAI, (model) =>
+    model.generateContent([
       SYSTEM_PROMPT,
       fileToGenerativePart(base64, mimeType),
-    ]);
-  } catch (apiError: any) {
-    // If the 3.x model is not available for the API key, fallback to stable 2.5/2.0
-    if (primaryModel !== 'gemini-2.5-flash' && primaryModel !== 'gemini-2.0-flash') {
-      try {
-        const fallbackModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-        result = await fallbackModel.generateContent([
-          SYSTEM_PROMPT,
-          fileToGenerativePart(base64, mimeType),
-        ]);
-      } catch {
-        const legacyModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-        result = await legacyModel.generateContent([
-          SYSTEM_PROMPT,
-          fileToGenerativePart(base64, mimeType),
-        ]);
-      }
-    } else {
-      throw apiError;
-    }
-  }
+    ])
+  );
 
   const text = result.response.text().trim();
 

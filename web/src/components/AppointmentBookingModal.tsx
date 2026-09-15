@@ -14,11 +14,7 @@ import {
   Avatar,
   Paper,
   CircularProgress,
-  Radio,
-  RadioGroup,
-  FormControlLabel,
-  FormControl,
-  FormLabel,
+  Alert,
 } from '@mui/material';
 import {
   CalendarMonth,
@@ -103,9 +99,11 @@ export const AppointmentBookingModal: React.FC<AppointmentBookingModalProps> = (
   const [consultationType, setConsultationType] = useState<Appointment['consultationType']>('In-Person Consultation');
   const [reason, setReason] = useState('Quarterly cardiovascular checkup and blood pressure review.');
   const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
+      setErrorMsg(null);
       setLoadingDocs(true);
       fetchAllDoctors('approved')
         .then((list) => {
@@ -124,9 +122,15 @@ export const AppointmentBookingModal: React.FC<AppointmentBookingModalProps> = (
   const selectedDoctor = doctors.find((d) => d.id === selectedDoctorId) || doctors[0];
 
   const handleSubmit = async () => {
-    if (!selectedDoctor || !date || !selectedSlot || !reason.trim()) return;
+    if (!selectedDoctor || !date || !selectedSlot || !reason.trim()) {
+      setErrorMsg('Please select an attending specialist, consultation date, time slot, and reason.');
+      return;
+    }
+
     setSubmitting(true);
+    setErrorMsg(null);
     try {
+      // Submits to POST /api/appointments via appointmentService
       const newApt = await bookAppointment({
         patientId,
         patientName,
@@ -148,6 +152,11 @@ export const AppointmentBookingModal: React.FC<AppointmentBookingModalProps> = (
 
       onAppointmentBooked(newApt);
       onClose();
+    } catch (err: any) {
+      console.error('Error booking appointment via POST /api/appointments:', err);
+      setErrorMsg(
+        err.response?.data?.message || err.message || 'Failed to submit appointment booking. Please try again.'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -159,16 +168,25 @@ export const AppointmentBookingModal: React.FC<AppointmentBookingModalProps> = (
         Book Clinical Consultation
       </DialogTitle>
       <DialogContent>
-        <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
+        <Typography variant="body2" sx={{ color: '#64748B', mb: 2 }}>
           Schedule an in-person hospital appointment or telehealth video consultation with MedTrace verified clinical specialists.
         </Typography>
+
+        {errorMsg && (
+          <Alert severity="error" sx={{ mb: 2.5, borderRadius: '12px', fontWeight: 600 }}>
+            {errorMsg}
+          </Alert>
+        )}
 
         <Grid container spacing={3}>
           {/* Step 1: Select Doctor */}
           <Grid item xs={12}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B', mb: 1.5 }}>
-              1. Select Attending Specialist
-            </Typography>
+            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#1E293B' }}>
+                1. Select Attending Specialist
+              </Typography>
+              {loadingDocs && <CircularProgress size={16} sx={{ color: '#1565C0' }} />}
+            </Box>
 
             <Grid container spacing={1.5}>
               {doctors.map((doc) => {

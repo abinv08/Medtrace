@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { StoredReport } from './reportService';
+import { getWorkingGenerativeModel } from './geminiService';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 export interface ReportChange {
@@ -31,7 +32,6 @@ export const compareReportsWithAI = async (
   if (!key) throw new Error('VITE_GEMINI_API_KEY is not configured.');
 
   const genAI = new GoogleGenerativeAI(key);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   // Build textual representation from stored AI analysis results
   const describeReport = (report: StoredReport, label: string): string => {
@@ -86,7 +86,9 @@ Rules:
 - Extract as many comparable parameters as you can find
 - Return ONLY the raw JSON object, no markdown fences`;
 
-  const result = await model.generateContent(prompt);
+  const result = await getWorkingGenerativeModel(genAI, (model) =>
+    model.generateContent(prompt)
+  );
   const text = result.response.text().trim();
 
   try {

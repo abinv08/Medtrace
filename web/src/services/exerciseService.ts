@@ -1,206 +1,211 @@
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  query,
-  where,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db } from '../config/firebase';
+import api from './api';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getWorkingGenerativeModel } from './geminiService';
 
 export interface ExerciseItem {
-  id: string;
+  _id?: string;
+  id?: string;
   name: string;
-  category: 'Cardio' | 'Strength' | 'Flexibility & Mobility' | 'Breathing & Rehabilitation' | 'Balance';
-  durationMinutes: number;
-  frequency: string;
-  intensity: 'Light' | 'Moderate' | 'Vigorous';
+  sets?: number;
+  reps?: number;
+  notes?: string;
+  category?: 'Cardio' | 'Strength' | 'Flexibility & Mobility' | 'Breathing & Rehabilitation' | 'Balance' | string;
+  durationMinutes?: number;
+  frequency?: string;
+  intensity?: 'Light' | 'Moderate' | 'Vigorous' | string;
   targetHeartRate?: string;
-  instructions: string;
-  precautions: string[];
-  benefits: string;
+  instructions?: string;
+  precautions?: string[];
+  benefits?: string;
 }
 
-export interface ExercisePlan {
-  id: string;
-  patientId: string;
-  title: string;
-  weeklyTargetMinutes: number;
-  dailyGoalCalories: number;
-  conditionFocus?: string;
-  routines: ExerciseItem[];
-  prescribedBy?: string; // 'AI Health Engine' | doctor name
-  createdAt?: any;
-}
-
-export interface ExerciseActivityLog {
-  id: string;
-  patientId: string;
-  date: string; // YYYY-MM-DD
-  activityName: string;
-  category: 'Cardio' | 'Strength' | 'Flexibility & Mobility' | 'Breathing & Rehabilitation' | 'Balance';
-  durationMinutes: number;
-  caloriesBurned: number;
-  intensity: 'Light' | 'Moderate' | 'Vigorous';
-  averageHeartRate?: number;
+export interface ExerciseProgressLog {
+  _id?: string;
+  id?: string;
+  date: string | Date;
   completed: boolean;
   notes?: string;
-  loggedAt?: string;
+  activityName?: string;
+  category?: string;
+  durationMinutes?: number;
+  caloriesBurned?: number;
+  intensity?: string;
+  averageHeartRate?: number;
 }
 
-const DEFAULT_EXERCISE_PLAN: ExercisePlan = {
-  id: 'plan-1',
-  patientId: 'default',
-  title: 'Cardio-Metabolic Wellness & Vitality Routine',
-  weeklyTargetMinutes: 150,
-  dailyGoalCalories: 250,
-  conditionFocus: 'Hypertension & Glycemic Management',
-  prescribedBy: 'MedTrace AI Clinical Health Engine',
-  routines: [
-    {
-      id: 'ex-1',
-      name: 'Brisk Walking / Interval Striding',
-      category: 'Cardio',
-      durationMinutes: 30,
-      frequency: '5 days/week',
-      intensity: 'Moderate',
-      targetHeartRate: '105 - 125 bpm',
-      instructions: 'Walk at a steady, brisk pace on flat or gently inclined terrain. Keep arms swinging naturally and shoulders relaxed.',
-      precautions: ['Stay hydrated', 'Stop if feeling dizzy or chest pressure', 'Wear supportive athletic footwear'],
-      benefits: 'Lowers systolic BP by 4-9 mmHg and enhances peripheral insulin sensitivity.',
-    },
-    {
-      id: 'ex-2',
-      name: 'Low-Impact Bodyweight Resistance & Squats',
-      category: 'Strength',
-      durationMinutes: 20,
-      frequency: '3 days/week',
-      intensity: 'Moderate',
-      instructions: 'Perform chair squats, wall push-ups, and calf raises. 2 sets of 10–12 repetitions with 60s rest between sets.',
-      precautions: ['Avoid holding breath (Valsalva maneuver)', 'Maintain upright posture'],
-      benefits: 'Preserves lean muscle mass and enhances glucose uptake.',
-    },
-    {
-      id: 'ex-3',
-      name: 'Diaphragmatic Breathing & Postural Mobility',
-      category: 'Breathing & Rehabilitation',
-      durationMinutes: 15,
-      frequency: 'Daily',
-      intensity: 'Light',
-      instructions: 'Lie or sit comfortably. Inhale slowly through nose for 4 counts, hold for 2, exhale through mouth for 6 counts.',
-      precautions: ['Do not strain', 'Perform in a calm, well-ventilated space'],
-      benefits: 'Downregulates sympathetic nervous tone and eases stress-induced blood pressure spikes.',
-    },
-  ],
+export type ExerciseActivityLog = ExerciseProgressLog;
+
+export interface ExercisePlan {
+  _id?: string;
+  id?: string;
+  patientId: string;
+  title?: string;
+  weeklyTargetMinutes?: number;
+  dailyGoalCalories?: number;
+  conditionFocus?: string;
+  frequency?: string;
+  assignedBy?: {
+    _id?: string;
+    name?: string;
+    email?: string;
+    hospitalName?: string;
+    department?: string;
+  } | string;
+  prescribedBy?: string;
+  exercises: ExerciseItem[];
+  routines?: ExerciseItem[];
+  progressLog: ExerciseProgressLog[];
+  createdAt?: any;
+  updatedAt?: any;
+}
+
+/**
+ * Normalizes backend ExercisePlan data so both 'exercises' and 'routines',
+ * and '_id' and 'id', can be accessed uniformly.
+ */
+export const normalizeExercisePlan = (rawPlan: any): ExercisePlan => {
+  const exercises = rawPlan.exercises || rawPlan.routines || [];
+  return {
+    ...rawPlan,
+    _id: rawPlan._id || rawPlan.id,
+    id: rawPlan._id || rawPlan.id,
+    title: rawPlan.title || 'Personalized Exercise Prescription',
+    weeklyTargetMinutes: rawPlan.weeklyTargetMinutes || 150,
+    dailyGoalCalories: rawPlan.dailyGoalCalories || 250,
+    frequency: rawPlan.frequency || 'Custom Schedule',
+    prescribedBy: typeof rawPlan.assignedBy === 'object' && rawPlan.assignedBy?.name
+      ? rawPlan.assignedBy.name
+      : (rawPlan.prescribedBy || 'Clinical Health Engine'),
+    exercises,
+    routines: exercises,
+    progressLog: rawPlan.progressLog || [],
+  };
 };
 
-const DEFAULT_ACTIVITY_LOGS: ExerciseActivityLog[] = [
-  {
-    id: 'log-1',
-    patientId: 'default',
-    date: new Date().toISOString().split('T')[0],
-    activityName: 'Morning Brisk Walk in Park',
-    category: 'Cardio',
-    durationMinutes: 30,
-    caloriesBurned: 145,
-    intensity: 'Moderate',
-    averageHeartRate: 112,
-    completed: true,
-    notes: 'Felt energized, morning weather was pleasant.',
-  },
-  {
-    id: 'log-2',
-    patientId: 'default',
-    date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
-    activityName: 'Wall Pushups & Chair Squats',
-    category: 'Strength',
-    durationMinutes: 20,
-    caloriesBurned: 95,
-    intensity: 'Moderate',
-    averageHeartRate: 104,
-    completed: true,
-    notes: '2 sets completed comfortably.',
-  },
-  {
-    id: 'log-3',
-    patientId: 'default',
-    date: new Date(Date.now() - 86400000 * 2).toISOString().split('T')[0],
-    activityName: 'Evening Pranayama & Gentle Stretch',
-    category: 'Breathing & Rehabilitation',
-    durationMinutes: 15,
-    caloriesBurned: 40,
-    intensity: 'Light',
-    averageHeartRate: 74,
-    completed: true,
-  },
-];
-
-const LOCAL_PLANS: Record<string, ExercisePlan> = {};
-const LOCAL_EX_LOGS: Record<string, ExerciseActivityLog[]> = {};
-
+/**
+ * Fetch patient exercise plan from GET /api/exercise-plans/:patientId
+ */
 export const fetchPatientExercisePlan = async (patientId: string): Promise<ExercisePlan | null> => {
   try {
-    const q = query(
-      collection(db, 'exercisePlans'),
-      where('patientId', '==', patientId)
-    );
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      return LOCAL_PLANS[patientId] || null;
+    const res = await api.get(`/api/exercise-plans/${patientId}`);
+    if (res.data?.success && res.data?.exercisePlan) {
+      return normalizeExercisePlan(res.data.exercisePlan);
     }
-    return snap.docs[0].data() as ExercisePlan;
-  } catch {
-    return LOCAL_PLANS[patientId] || null;
+    return null;
+  } catch (err: any) {
+    if (err.response?.status !== 404) {
+      console.warn('fetchPatientExercisePlan error:', err);
+    }
+    return null;
   }
 };
 
-// Removed: DEFAULT_PLAN_FOR_USER — no longer used
+/**
+ * Create a new exercise plan via POST /api/exercise-plans
+ */
+export const createBackendExercisePlan = async (planData: {
+  patientId: string;
+  exercises: ExerciseItem[];
+  frequency?: string;
+  assignedBy?: string;
+}): Promise<ExercisePlan | null> => {
+  try {
+    const res = await api.post('/api/exercise-plans', planData);
+    if (res.data?.success && res.data?.exercisePlan) {
+      return normalizeExercisePlan(res.data.exercisePlan);
+    }
+    return null;
+  } catch (err) {
+    console.error('createBackendExercisePlan error:', err);
+    return null;
+  }
+};
 
-export const logExerciseActivity = async (
-  log: Omit<ExerciseActivityLog, 'id' | 'loggedAt'>
-): Promise<ExerciseActivityLog> => {
-  const id = `exlog-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-  const newLog: ExerciseActivityLog = {
-    ...log,
-    id,
-    loggedAt: new Date().toISOString(),
+/**
+ * Log exercise progress via PUT /api/exercise-plans/:id/progress
+ */
+export const logExerciseProgress = async (
+  planIdOrPatientId: string,
+  progress: {
+    date?: string | Date;
+    completed?: boolean;
+    notes?: string;
+    activityName?: string;
+    category?: string;
+    durationMinutes?: number;
+    caloriesBurned?: number;
+    intensity?: string;
+    averageHeartRate?: number;
+  }
+): Promise<{ success: boolean; exercisePlan?: ExercisePlan; progressEntry?: ExerciseProgressLog }> => {
+  const noteParts = [
+    progress.activityName ? `Activity: ${progress.activityName}` : '',
+    progress.category ? `Category: ${progress.category}` : '',
+    progress.durationMinutes ? `Duration: ${progress.durationMinutes} min` : '',
+    progress.caloriesBurned ? `Calories: ${progress.caloriesBurned} kcal` : '',
+    progress.intensity ? `Intensity: ${progress.intensity}` : '',
+    progress.averageHeartRate ? `Avg HR: ${progress.averageHeartRate} bpm` : '',
+    progress.notes ? `Notes: ${progress.notes}` : '',
+  ].filter(Boolean);
+
+  const formattedNotes = progress.notes && !progress.activityName
+    ? progress.notes
+    : noteParts.join(' | ');
+
+  const payload = {
+    date: progress.date || new Date().toISOString(),
+    completed: progress.completed !== undefined ? progress.completed : true,
+    notes: formattedNotes,
   };
 
-  try {
-    await setDoc(doc(db, 'exerciseLogs', id), {
-      ...newLog,
-      loggedAt: serverTimestamp(),
-    });
-  } catch {
-    if (!LOCAL_EX_LOGS[log.patientId]) {
-      LOCAL_EX_LOGS[log.patientId] = [];
-    }
-    LOCAL_EX_LOGS[log.patientId].unshift(newLog);
+  const res = await api.put(`/api/exercise-plans/${planIdOrPatientId}/progress`, payload);
+  if (res.data?.success) {
+    const rawPlan = res.data.exercisePlan;
+    return {
+      success: true,
+      exercisePlan: rawPlan ? normalizeExercisePlan(rawPlan) : undefined,
+      progressEntry: res.data.progressEntry,
+    };
   }
-
-  return newLog;
+  return { success: false };
 };
 
-export const fetchExerciseLogs = async (patientId: string): Promise<ExerciseActivityLog[]> => {
-  try {
-    const q = query(
-      collection(db, 'exerciseLogs'),
-      where('patientId', '==', patientId)
-    );
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      return LOCAL_EX_LOGS[patientId] || [];
-    }
-    const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ExerciseActivityLog));
-    LOCAL_EX_LOGS[patientId] = list;
-    return list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  } catch {
-    return LOCAL_EX_LOGS[patientId] || [];
+/**
+ * Log exercise activity helper for backward compatibility
+ */
+export const logExerciseActivity = async (
+  log: {
+    patientId: string;
+    date?: string;
+    activityName: string;
+    category?: any;
+    durationMinutes?: number;
+    caloriesBurned?: number;
+    intensity?: any;
+    averageHeartRate?: number;
+    completed?: boolean;
+    notes?: string;
   }
+): Promise<ExerciseProgressLog> => {
+  const res = await logExerciseProgress(log.patientId, log);
+  return res.progressEntry || {
+    date: log.date || new Date().toISOString(),
+    completed: true,
+    notes: log.notes,
+  };
 };
 
+/**
+ * Fetch exercise logs helper for backward compatibility
+ */
+export const fetchExerciseLogs = async (patientId: string): Promise<ExerciseProgressLog[]> => {
+  const plan = await fetchPatientExercisePlan(patientId);
+  return plan?.progressLog || [];
+};
+
+/**
+ * Generate an AI exercise plan and persist it to the backend via POST /api/exercise-plans
+ */
 export const generateAIExercisePlan = async (
   patientId: string,
   patientData: {
@@ -218,7 +223,6 @@ export const generateAIExercisePlan = async (
 
   try {
     const genAI = new GoogleGenerativeAI(key);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const prompt = `You are a clinical physical rehabilitation and exercise physiology specialist.
 Generate a safe, personalized exercise and wellness prescription in JSON format for this patient:
 Name: ${patientData.name || 'Patient'}
@@ -247,24 +251,45 @@ Output ONLY valid JSON with this structure:
   ]
 }`;
 
-    const res = await model.generateContent(prompt);
+    const res = await getWorkingGenerativeModel(genAI, (model) =>
+      model.generateContent(prompt)
+    );
     const text = res.response.text();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
-      const generatedPlan: ExercisePlan = {
-        id: `plan-ai-${Date.now()}`,
+      const routines: ExerciseItem[] = parsed.routines || [];
+
+      // Format exercises for MongoDB backend storage
+      const exercisesForBackend: ExerciseItem[] = routines.map((r: any) => ({
+        name: r.name,
+        notes: [
+          r.category ? `Category: ${r.category}` : '',
+          r.durationMinutes ? `${r.durationMinutes} min` : '',
+          r.frequency ? `${r.frequency}` : '',
+          r.intensity ? `${r.intensity} intensity` : '',
+          r.instructions ? `Instructions: ${r.instructions}` : '',
+          r.benefits ? `Benefit: ${r.benefits}` : '',
+        ].filter(Boolean).join(' | '),
+      }));
+
+      const createdPlan = await createBackendExercisePlan({
         patientId,
-        title: parsed.title || 'AI Personalized Fitness Prescription',
-        weeklyTargetMinutes: parsed.weeklyTargetMinutes || 150,
-        dailyGoalCalories: parsed.dailyGoalCalories || 250,
-        conditionFocus: parsed.conditionFocus || patientData.chronicConditions || 'General Wellness',
-        prescribedBy: 'MedTrace AI Clinical Physiology Engine',
-        routines: parsed.routines || [],
-        createdAt: new Date().toISOString(),
-      };
-      LOCAL_PLANS[patientId] = generatedPlan;
-      return generatedPlan;
+        frequency: parsed.weeklyTargetMinutes ? `${parsed.weeklyTargetMinutes} min/week` : '4-5 days/week',
+        exercises: exercisesForBackend,
+      });
+
+      if (createdPlan) {
+        return {
+          ...createdPlan,
+          title: parsed.title || createdPlan.title || 'AI Personalized Fitness Prescription',
+          weeklyTargetMinutes: parsed.weeklyTargetMinutes || 150,
+          dailyGoalCalories: parsed.dailyGoalCalories || 250,
+          conditionFocus: parsed.conditionFocus || patientData.chronicConditions || 'General Wellness',
+          prescribedBy: 'MedTrace AI Clinical Physiology Engine',
+          routines,
+        };
+      }
     }
   } catch (err) {
     console.warn('generateAIExercisePlan error:', err);
