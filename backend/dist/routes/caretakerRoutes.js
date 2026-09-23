@@ -12,4 +12,6 @@ router.post('/assign', caretakerController_1.assignCaretaker);
 router.put('/:id/revoke', caretakerController_1.revokeCaretakerAssignment);
 // Endpoint: GET /api/caretaker/:caretakerId/patients (list patients assigned to this caretaker)
 router.get('/:caretakerId/patients', caretakerController_1.getAssignedPatients);
+// Endpoint: GET /api/caretaker/patient/:patientId (list caretakers assigned to this patient)
+router.get('/patient/:patientId', caretakerController_1.getPatientCaretakers);
 exports.default = router;

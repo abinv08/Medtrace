@@ -13,7 +13,7 @@ export interface TestResult {
   _id: string;
   id?: string;
   patientId: string;
-  fileUrl: string;
+  fileUrl?: string;
   fileType?: string;
   category?: string;
   notes?: string;
@@ -35,7 +35,7 @@ export interface TestResult {
   summary?: string;
   fileName?: string;
   fileSize?: string;
-  status?: 'final' | 'preliminary' | 'abnormal_flagged';
+  status?: 'requested' | 'completed' | 'final' | 'preliminary' | 'abnormal_flagged';
   biomarkers?: TestBiomarker[];
 }
 

@@ -100,7 +100,7 @@ export const DoctorDashboard: React.FC = () => {
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState(0);
-  const [workspaceMode, setWorkspaceMode] = useState<'patients' | 'appointments'>('patients');
+  const [workspaceMode, setWorkspaceMode] = useState<'patients' | 'appointments' | 'agenda'>('patients');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PatientSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -111,6 +111,7 @@ export const DoctorDashboard: React.FC = () => {
   const [patientVitals, setPatientVitals] = useState<VitalReading[]>([]);
   const [patientAnomalies, setPatientAnomalies] = useState<AnomalyAlert[]>([]);
   const [doctorAppointments, setDoctorAppointments] = useState<Appointment[]>([]);
+  const [pendingAppointmentCount, setPendingAppointmentCount] = useState(0);
   const [loadingPatient, setLoadingPatient] = useState(false);
   const [searchError, setSearchError] = useState('');
 
@@ -153,6 +154,8 @@ export const DoctorDashboard: React.FC = () => {
       setPatientAnomalies={setPatientAnomalies}
       doctorAppointments={doctorAppointments}
       setDoctorAppointments={setDoctorAppointments}
+      pendingAppointmentCount={pendingAppointmentCount}
+      setPendingAppointmentCount={setPendingAppointmentCount}
       loadingPatient={loadingPatient}
       setLoadingPatient={setLoadingPatient}
       searchError={searchError}
@@ -215,6 +218,7 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
     patientVitals, setPatientVitals,
     patientAnomalies, setPatientAnomalies,
     doctorAppointments, setDoctorAppointments,
+    pendingAppointmentCount, setPendingAppointmentCount,
     loadingPatient, setLoadingPatient,
     searchError, setSearchError,
   } = props;
@@ -222,6 +226,15 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
   const [patientVitalsMap, setPatientVitalsMap] = useState<Record<string, BackendVitals>>({});
   const [loadingPatients, setLoadingPatients] = useState(false);
   const [patientFetchError, setPatientFetchError] = useState<string | null>(null);
+  const [needsAttentionFirst, setNeedsAttentionFirst] = useState(false);
+
+  const hasVitalsAnomaly = (vitals?: BackendVitals): boolean => Boolean(vitals && (
+    (vitals.bloodPressureSystolic && vitals.bloodPressureSystolic >= 140) ||
+    (vitals.bloodPressureDiastolic && vitals.bloodPressureDiastolic >= 90) ||
+    (vitals.heartRate && (vitals.heartRate < 50 || vitals.heartRate > 120)) ||
+    (vitals.spo2 && vitals.spo2 < 92) ||
+    (vitals.temperature && (vitals.temperature < 36 || vitals.temperature > 38))
+  ));
 
   const loadInitialData = useCallback(async () => {
     setLoadingPatients(true);
@@ -320,8 +333,12 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
       setPatientVitalsMap(vitalsMap);
 
       // 3. Appointments Queue
-      const apts = await fetchDoctorAppointments(currentDoctorId || 'doc-1').catch(() => []);
+      const [apts, pendingApts] = await Promise.all([
+        fetchDoctorAppointments(currentDoctorId || 'doc-1').catch(() => []),
+        fetchDoctorAppointments(currentDoctorId || 'doc-1', undefined, 'pending').catch(() => []),
+      ]);
       setDoctorAppointments(apts);
+      setPendingAppointmentCount(pendingApts.length);
     } catch (e: any) {
       console.error('Error loading doctor dashboard data:', e);
       setPatientFetchError(e.message || 'Error loading clinical records');
@@ -539,7 +556,7 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                 return (
                   <Box
                     key={p.uid}
-                    onClick={() => openPatient(p)}
+                    onClick={() => navigate(`/patients/${encodeURIComponent(p.uid)}`)}
                     sx={{
                       display: 'flex', alignItems: 'center', gap: 2, p: 1.5,
                       borderRadius: '10px', cursor: 'pointer',
@@ -701,14 +718,21 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                 Patients Directory ({allPatients.length})
               </Button>
               <Button
+                variant={workspaceMode === 'agenda' ? 'contained' : 'outlined'}
+                onClick={() => setWorkspaceMode('agenda')}
+                sx={{ borderRadius: '999px', fontWeight: 700, textTransform: 'none', backgroundColor: workspaceMode === 'agenda' ? C.primary : 'transparent' }}
+              >
+                Weekly Agenda
+              </Button>
+              <Button
                 variant={workspaceMode === 'appointments' ? 'contained' : 'outlined'}
                 onClick={() => setWorkspaceMode('appointments')}
                 sx={{ borderRadius: '999px', fontWeight: 700, textTransform: 'none', backgroundColor: workspaceMode === 'appointments' ? C.primary : 'transparent' }}
               >
                 Appointments Queue ({doctorAppointments.length})
-                {doctorAppointments.filter((a: Appointment) => a.status === 'pending').length > 0 && (
+                {pendingAppointmentCount > 0 && (
                   <Chip
-                    label={`${doctorAppointments.filter((a: Appointment) => a.status === 'pending').length} Pending`}
+                    label={`${pendingAppointmentCount} Pending`}
                     size="small"
                     sx={{ ml: 1, height: 20, fontSize: '0.65rem', fontWeight: 800, backgroundColor: '#EF4444', color: '#fff' }}
                   />
@@ -719,9 +743,14 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
             {workspaceMode === 'patients' ? (
               <Box>
                 <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
-                  <Typography variant="subtitle2" sx={{ color: C.muted, fontWeight: 700 }}>
-                    ACTIVE PATIENT RECORDS
-                  </Typography>
+                  <Box display="flex" alignItems="center" gap={1.5}>
+                    <Typography variant="subtitle2" sx={{ color: C.muted, fontWeight: 700 }}>
+                      ACTIVE PATIENT RECORDS
+                    </Typography>
+                    <Button size="small" variant={needsAttentionFirst ? 'contained' : 'outlined'} onClick={() => setNeedsAttentionFirst((value) => !value)} sx={{ borderRadius: '999px', fontSize: '0.7rem', fontWeight: 700 }}>
+                      {needsAttentionFirst ? 'Needs Attention First' : 'Alphabetical'}
+                    </Button>
+                  </Box>
                   <IconButton
                     size="small"
                     onClick={loadInitialData}
@@ -747,13 +776,20 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                   <Alert severity="info" sx={{ borderRadius: '12px' }}>No patients registered yet.</Alert>
                 ) : (
                   <Box display="flex" flexDirection="column" gap={1.5}>
-                    {allPatients.map((p: PatientSearchResult) => {
+                    {[...allPatients].sort((a, b) => {
+                      if (needsAttentionFirst) {
+                        const difference = Number(hasVitalsAnomaly(patientVitalsMap[b.uid] || patientVitalsMap[(b as any).patientDocId])) - Number(hasVitalsAnomaly(patientVitalsMap[a.uid] || patientVitalsMap[(a as any).patientDocId]));
+                        if (difference !== 0) return difference;
+                      }
+                      return (a.name || '').localeCompare(b.name || '');
+                    }).map((p: PatientSearchResult) => {
                       const qv = patientVitalsMap[p.uid] || patientVitalsMap[(p as any).patientDocId];
+                      const hasAnomaly = hasVitalsAnomaly(qv);
                       return (
                         <Paper
                           key={p.uid}
                           elevation={0}
-                          onClick={() => openPatient(p)}
+                          onClick={() => navigate(`/patients/${encodeURIComponent(p.uid)}`)}
                           sx={{
                             p: 2,
                             borderRadius: '12px',
@@ -768,7 +804,10 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                               {p.name?.charAt(0)}
                             </Avatar>
                             <Box sx={{ minWidth: 180, flex: { xs: '1 1 100%', sm: 1 } }}>
-                              <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
+                              <Box display="flex" alignItems="center" gap={1}>
+                                <Typography variant="body2" sx={{ fontWeight: 700, color: C.slate }}>{p.name}</Typography>
+                                {hasAnomaly && <Chip label="Needs attention" size="small" color="error" sx={{ height: 20, fontSize: '0.62rem', fontWeight: 800 }} />}
+                              </Box>
                               <Typography variant="caption" sx={{ color: C.muted }}>{p.patientId} · {p.email}</Typography>
                             </Box>
 
@@ -819,16 +858,55 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                   </Box>
                 )}
               </Box>
-            ) : (
+            ) : workspaceMode === 'appointments' ? (
               <AppointmentsQueueTab
                 appointments={doctorAppointments}
                 onStatusUpdated={loadInitialData}
               />
+            ) : (
+              <DoctorAgenda appointments={doctorAppointments} />
             )}
           </Box>
         )}
       </Container>
     </Box>
+  );
+};
+
+const DoctorAgenda: React.FC<{ appointments: Appointment[] }> = ({ appointments }) => {
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(today.getDate() - today.getDay());
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(start);
+    day.setDate(start.getDate() + index);
+    return day;
+  });
+
+  return (
+    <Paper elevation={0} sx={{ p: 3, borderRadius: '16px', border: `1px solid ${C.border}` }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: C.slate, mb: 2 }}>This Week&apos;s Agenda</Typography>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(7, 1fr)' }, gap: 1 }}>
+        {days.map((day) => {
+          const dayKey = day.toISOString().slice(0, 10);
+          const dayAppointments = appointments.filter((appointment) => appointment.date === dayKey);
+          return (
+            <Box key={dayKey} sx={{ minHeight: 150, p: 1.2, border: `1px solid ${C.border}`, borderRadius: '10px', backgroundColor: dayKey === today.toISOString().slice(0, 10) ? '#EFF6FF' : '#FFFFFF' }}>
+              <Typography variant="caption" sx={{ fontWeight: 800, color: C.primary }}>{day.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</Typography>
+              <Box display="flex" flexDirection="column" gap={1} mt={1}>
+                {dayAppointments.length === 0 ? <Typography variant="caption" color="text.secondary">No visits</Typography> : dayAppointments.map((appointment) => (
+                  <Box key={appointment.id} sx={{ p: 1, borderRadius: '8px', backgroundColor: appointment.status === 'pending' ? '#FFFBEB' : '#F8FAFC' }}>
+                    <Typography variant="caption" display="block" fontWeight={800}>{appointment.timeSlot}</Typography>
+                    <Typography variant="caption" display="block">{appointment.patientName}</Typography>
+                    <Chip label={appointment.status} size="small" sx={{ height: 18, fontSize: '0.6rem', mt: 0.5 }} />
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
+    </Paper>
   );
 };
 

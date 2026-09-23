@@ -4,8 +4,10 @@ export interface ITestResult extends Document {
   _id: mongoose.Types.ObjectId;
   patientId: mongoose.Types.ObjectId;
   fileUrl: string;
+  status: 'requested' | 'completed';
   fileType?: string;
   uploadedBy?: mongoose.Types.ObjectId;
+  requestedBy?: mongoose.Types.ObjectId;
   category?: string;
   notes?: string;
   uploadDate: Date;
@@ -23,14 +25,23 @@ const TestResultSchema: Schema = new Schema(
     },
     fileUrl: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
+    },
+    status: {
+      type: String,
+      enum: ['requested', 'completed'],
+      default: 'completed',
     },
     fileType: {
       type: String,
       trim: true,
     },
     uploadedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    requestedBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
     },

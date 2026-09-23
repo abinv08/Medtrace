@@ -29,6 +29,7 @@ import { yupResolver } from '@hookform/resolvers/yup';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { MedTraceLogo } from '../components/Logo';
+import { getRoleDashboardUrl } from './LoginPage';
 
 // ─── Role definitions ─────────────────────────────────────────────────────────
 interface RoleDefinition {
@@ -256,13 +257,13 @@ export const RegisterPage: React.FC = () => {
 
       if (res.success) {
         const userRole = res.user?.role || data.role || 'patient';
-        const roleSlug = userRole.toLowerCase().replace(/\s+/g, '-');
+        const targetUrl = getRoleDashboardUrl(userRole);
         if (data.role === 'Doctor' || data.role === 'Nurse') {
           setSnackbarMessage('Account created! Pending admin approval — you will be notified once approved.');
-          setTimeout(() => navigate(`/dashboard/${roleSlug}`), 1200);
+          setTimeout(() => navigate(targetUrl), 1200);
         } else {
           setSnackbarMessage('Registration Successful! Redirecting to Dashboard...');
-          setTimeout(() => navigate(`/dashboard/${roleSlug}`), 800);
+          setTimeout(() => navigate(targetUrl), 800);
         }
       } else {
         setErrorMessage(res.message || 'Registration failed. Please try again.');
@@ -278,12 +279,33 @@ export const RegisterPage: React.FC = () => {
     setSubmitting(true);
     setErrorMessage(null);
     try {
-      const res = await googleLogin('Patient');
+      const roleToUse = currentRole || 'Patient';
+      const registrationDetails = {
+        name: watch('name'),
+        email: watch('email'),
+        phone: watch('phone'),
+        role: roleToUse,
+        specialization: watch('specialization'),
+        licenseNumber: watch('licenseNumber'),
+        registeredDate: watch('registeredDate'),
+        registrationDate: watch('registeredDate'),
+      };
+
+      if (!registrationDetails.name || !registrationDetails.phone) {
+        setErrorMessage('Please enter your full name and phone number before continuing with Google.');
+        return;
+      }
+
+      if (isDoctorRole && (!registrationDetails.specialization || !registrationDetails.licenseNumber || !registrationDetails.registeredDate)) {
+        setErrorMessage('Please complete your professional credentials before continuing with Google.');
+        return;
+      }
+
+      const res = await googleLogin(roleToUse, registrationDetails);
       if (res.success && res.user) {
         setSnackbarMessage('Google Registration Successful!');
-        const userRole = res.user?.role || 'patient';
-        const role = userRole.toLowerCase().replace(/\s+/g, '-');
-        setTimeout(() => navigate('/'), 800);
+        const targetUrl = getRoleDashboardUrl(res.user?.role || roleToUse);
+        setTimeout(() => navigate(targetUrl), 800);
       } else {
         setErrorMessage(res.message || 'Google Sign-Up failed');
       }

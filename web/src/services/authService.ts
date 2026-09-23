@@ -20,6 +20,7 @@ import {
   collection,
 } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
+import api from './api';
 import { checkIsAssignedCaretaker } from './caretakerService';
 
 // ─── Single hospital name (fixed for this system) ─────────────────────────────
@@ -32,7 +33,7 @@ export interface UserProfile {
   email: string;
   phone: string;
   hospitalName: string;
-  role: 'Patient' | 'Guardian' | 'Doctor' | 'Nurse' | 'Hospital Administrator' | 'Admin' | 'Caretaker';
+  role: 'Patient' | 'Guardian' | 'Doctor' | 'Nurse' | 'Hospital Administrator' | 'Admin' | 'Caretaker' | string;
   patientId?: string;           // MT-2026-000001 (patients only)
   dateOfBirth?: string;
   gender?: string;
@@ -49,6 +50,8 @@ export interface UserProfile {
   yearsExperience?: number;
   qualifications?: string;
   status?: 'pending' | 'approved' | 'rejected';  // doctors need admin approval
+  approvedAt?: unknown;
+  approvedBy?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -80,7 +83,7 @@ export interface AuthResponse {
   user?: UserProfile;
 }
 
-// ─── Helper: map Firebase error codes to human-readable messages ──────────────
+// ─── Helper: map error codes to human-readable messages ──────────────────────
 const firebaseErrorMessage = (error: any): string => {
   if (!error) return 'An unexpected error occurred. Please try again.';
   const code = typeof error === 'string' ? error : error?.code;
@@ -103,7 +106,13 @@ const firebaseErrorMessage = (error: any): string => {
       return 'Google Sign-In was cancelled.';
     case 'auth/network-request-failed':
       return 'Network error. Please check your connection.';
+    case 'permission-denied':
+    case 'PERMISSION_DENIED':
+      return 'Firestore permission denied. Publish the project Firestore rules, then try again.';
     default:
+      if (typeof message === 'string' && (message.includes('permission') || message.includes('Missing or insufficient'))) {
+        return 'Firestore permission denied. Publish the project Firestore rules, then try again.';
+      }
       if (message) {
         return code ? `Error [${code}]: ${message}` : message;
       }
@@ -111,164 +120,212 @@ const firebaseErrorMessage = (error: any): string => {
   }
 };
 
-// ─── Helper: fetch user profile from Firestore ────────────────────────────────
+// ─── Helper: fetch user profile — Firestore is authoritative source of truth for role ───────
 export const fetchUserProfile = async (uid: string): Promise<UserProfile | null> => {
-  try {
-    const ref = doc(db, 'users', uid);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      const data = snap.data() as UserProfile;
-      if (data.email && data.role !== 'Caretaker') {
-        const isCaretaker = await checkIsAssignedCaretaker(data.email);
-        if (isCaretaker) {
-          data.role = 'Caretaker';
-          updateDoc(ref, { role: 'Caretaker', updatedAt: serverTimestamp() }).catch(() => {});
+  // 1. Firestore first — this is where registration stores the role (Doctor, Patient, Admin, etc.)
+  if (uid) {
+    try {
+      const ref = doc(db, 'users', uid);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data();
+        const profile: UserProfile = {
+          id: uid,
+          name: data.name || '',
+          email: data.email || '',
+          phone: data.phone || '',
+          hospitalName: data.hospitalName || HOSPITAL_NAME,
+          role: data.role || 'Patient',
+          patientId: data.patientId,
+          dateOfBirth: data.dateOfBirth,
+          gender: data.gender,
+          bloodGroup: data.bloodGroup,
+          specialization: data.specialization || data.department,
+          licenseNumber: data.licenseNumber,
+          status: data.status || 'approved',
+          approvedAt: data.approvedAt,
+          approvedBy: data.approvedBy,
+          createdAt: data.createdAt,
+          updatedAt: data.updatedAt,
+        };
+
+        // Check caretaker assignment
+        if (profile.email && profile.role !== 'Caretaker') {
+          const isCaretaker = await checkIsAssignedCaretaker(profile.email).catch(() => false);
+          if (isCaretaker) {
+            profile.role = 'Caretaker';
+            updateDoc(ref, { role: 'Caretaker', updatedAt: serverTimestamp() }).catch(() => {});
+          }
         }
+
+        // Cache the fresh Firestore data
+        localStorage.setItem('medtrace_user', JSON.stringify(profile));
+        return profile;
       }
-      return data;
+    } catch {
+      // Firestore permission-denied or offline — fall through
     }
-    return null;
-  } catch {
-    return null;
   }
+
+  return null;
+};
+
+const isApprovedProfessional = (profile: UserProfile): boolean => {
+  const role = profile.role.toLowerCase().trim();
+  return !['doctor', 'nurse'].includes(role) || profile.status === 'approved';
 };
 
 // ─── Patient ID Generator (MT-YYYY-XXXXXX) ────────────────────────────────────
-// Uses a Firestore transaction on a counter document to guarantee uniqueness
 export const generatePatientId = async (): Promise<string> => {
   const year = new Date().getFullYear();
-  const counterRef = doc(db, 'system', 'patientIdCounter');
+  try {
+    const counterRef = doc(db, 'system', 'patientIdCounter');
+    const newCount = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(counterRef);
+      let current = 0;
+      if (snap.exists()) {
+        current = (snap.data().count as number) || 0;
+      }
+      const next = current + 1;
+      tx.set(counterRef, { count: next, updatedAt: serverTimestamp() }, { merge: true });
+      return next;
+    });
 
-  const newCount = await runTransaction(db, async (tx) => {
-    const snap = await tx.get(counterRef);
-    let current = 0;
-    if (snap.exists()) {
-      current = (snap.data().count as number) || 0;
-    }
-    const next = current + 1;
-    tx.set(counterRef, { count: next, updatedAt: serverTimestamp() }, { merge: true });
-    return next;
-  });
-
-  const padded = String(newCount).padStart(6, '0');
-  return `MT-${year}-${padded}`;
+    const padded = String(newCount).padStart(6, '0');
+    return `MT-${year}-${padded}`;
+  } catch {
+    const randomNum = Math.floor(100000 + Math.random() * 900000);
+    return `MT-${year}-${randomNum}`;
+  }
 };
 
 // ─── Auth Service ─────────────────────────────────────────────────────────────
 export const authService = {
   // ── Email/Password Registration ──────────────────────────────────────────────
   register: async (payload: RegisterPayload): Promise<AuthResponse> => {
+    const normalizedEmail = payload.email.toLowerCase().trim();
+    const roleLower = (payload.role || '').toLowerCase();
+    const isDoctor = roleLower === 'doctor' || roleLower === 'nurse';
+
+    // Firebase is the source of truth for a fresh registration.
+    let firebaseUid = '';
     try {
-      // 1. Create Firebase Auth user
-      const credential = await createUserWithEmailAndPassword(
-        auth,
-        payload.email,
-        payload.password
-      );
-      const firebaseUser = credential.user;
+      const credential = await createUserWithEmailAndPassword(auth, normalizedEmail, payload.password);
+      firebaseUid = credential.user.uid;
+      await updateProfile(credential.user, { displayName: payload.name }).catch(() => {});
 
-      // 2. Set display name in Firebase Auth
-      await updateProfile(firebaseUser, { displayName: payload.name });
-
-      // 3. Check if assigned caretaker
-      const isCaretaker = await checkIsAssignedCaretaker(payload.email);
+      const isCaretaker = await checkIsAssignedCaretaker(normalizedEmail).catch(() => false);
       const effectiveRole = isCaretaker ? 'Caretaker' : (payload.role as UserProfile['role']);
-
       let patientId: string | undefined;
       if (effectiveRole === 'Patient' || effectiveRole === 'Guardian') {
-        patientId = await generatePatientId();
+        patientId = await generatePatientId().catch(() => `MT-2026-${Math.floor(100000 + Math.random() * 900000)}`);
       }
 
-      // 4. Build the profile — doctor gets status=pending, others active
-      const roleLower = (effectiveRole || '').toLowerCase();
-      const isDoctor = roleLower === 'doctor' || roleLower === 'nurse';
       const regDate = payload.registeredDate || payload.registrationDate;
-      const profileData: Omit<UserProfile, 'id'> & { createdAt: any; updatedAt: any } = {
+      const profileData: any = {
         name: payload.name,
-        email: payload.email.toLowerCase().trim(),
+        email: normalizedEmail,
         phone: payload.phone,
         hospitalName: HOSPITAL_NAME,
         role: effectiveRole,
         patientId,
-        status: isDoctor ? 'pending' : undefined,
+        status: isDoctor ? 'pending' : 'approved',
         specialization: payload.specialization,
         licenseNumber: payload.licenseNumber,
         registeredDate: regDate,
         registrationDate: regDate,
         yearsExperience: payload.yearsExperience,
         qualifications: payload.qualifications,
-        createdAt: serverTimestamp() as any,
-        updatedAt: serverTimestamp() as any,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
-
-      // Remove undefined keys so Firestore doesn't complain
-      Object.keys(profileData).forEach((k) => {
-        if ((profileData as any)[k] === undefined) delete (profileData as any)[k];
+      Object.keys(profileData).forEach((key) => {
+        if (profileData[key] === undefined) delete profileData[key];
       });
 
-      // 5. Save to Firestore users collection
-      await setDoc(doc(db, 'users', firebaseUser.uid), profileData);
+      await setDoc(doc(db, 'users', firebaseUid), profileData);
 
-      // 6. If patient, also create a patient health record stub
-      if (payload.role === 'Patient' && patientId) {
-        await setDoc(doc(db, 'patientRecords', firebaseUser.uid), {
-          uid: firebaseUser.uid,
+      if ((effectiveRole === 'Patient' || effectiveRole === 'Guardian') && patientId) {
+        await setDoc(doc(db, 'patientRecords', firebaseUid), {
+          uid: firebaseUid,
           patientId,
           name: payload.name,
-          email: payload.email.toLowerCase().trim(),
+          email: normalizedEmail,
           phone: payload.phone,
-          bloodGroup: '',
-          dateOfBirth: '',
-          gender: '',
-          address: '',
-          allergies: '',
-          chronicConditions: '',
-          emergencyContact: '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
       }
-
-      return {
-        success: true,
-        message:
-          payload.role === 'Doctor'
-            ? 'Account created. Your profile is pending admin approval. You will be notified once approved.'
-            : 'Account created successfully',
-        user: {
-          id: firebaseUser.uid,
-          ...profileData,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      };
-    } catch (error: any) {
-      return {
-        success: false,
-        message: firebaseErrorMessage(error),
-      };
+    } catch (fbErr: any) {
+      await signOut(auth).catch(() => {});
+      return { success: false, message: firebaseErrorMessage(fbErr) };
     }
+
+    const finalProfile: UserProfile = {
+      id: firebaseUid,
+      name: payload.name,
+      email: normalizedEmail,
+      phone: payload.phone,
+      hospitalName: HOSPITAL_NAME,
+      role: (payload.role as UserProfile['role']) || 'Doctor',
+      specialization: payload.specialization,
+      licenseNumber: payload.licenseNumber,
+      status: isDoctor ? 'pending' : 'approved',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem('medtrace_user', JSON.stringify(finalProfile));
+
+    return {
+      success: true,
+      message: isDoctor
+        ? 'Account created. Your profile is pending admin approval. You will be notified once approved.'
+        : 'Account created successfully',
+      user: finalProfile,
+    };
   },
 
   // ── Email/Password Login ─────────────────────────────────────────────────────
   login: async (payload: LoginPayload): Promise<AuthResponse> => {
+    const normalizedEmail = payload.email.toLowerCase().trim();
     try {
-      // Set session persistence based on rememberMe
+      // Do not let a token from the removed MongoDB login flow survive into this session.
+      localStorage.removeItem('medtrace_access_token');
+      localStorage.removeItem('token');
       await setPersistence(
         auth,
         payload.rememberMe ? browserLocalPersistence : browserSessionPersistence
-      );
+      ).catch(() => {});
 
       const credential = await signInWithEmailAndPassword(
         auth,
-        payload.email,
+        normalizedEmail,
         payload.password
       );
 
-      // Fetch extended profile from Firestore
-      const profile = await fetchUserProfile(credential.user.uid);
+      // Clear stale cache so fetchUserProfile goes to Firestore
+      localStorage.removeItem('medtrace_user');
+
+      // fetchUserProfile now reads Firestore first — role is always correct
+      const profile = await fetchUserProfile(credential.user.uid).catch(() => null);
+
       if (!profile) {
-        return { success: false, message: 'User profile not found. Please re-register.' };
+        await signOut(auth).catch(() => {});
+        return {
+          success: false,
+          message: 'Your Firebase account has no role profile in Firestore. Please contact an administrator.',
+        };
+      }
+
+      if (!isApprovedProfessional(profile)) {
+        await signOut(auth).catch(() => {});
+        return {
+          success: false,
+          message: profile.status === 'rejected'
+            ? 'Your professional account was not approved. Please contact an administrator.'
+            : 'Your professional account is awaiting administrator approval.',
+        };
       }
 
       return {
@@ -285,7 +342,7 @@ export const authService = {
   },
 
   // ── Google Sign-In / Sign-Up ─────────────────────────────────────────────────
-  googleAuth: async (role?: string): Promise<AuthResponse> => {
+  googleAuth: async (_role?: string, registrationDetails?: Partial<RegisterPayload>): Promise<AuthResponse> => {
     try {
       const provider = new GoogleAuthProvider();
       provider.addScope('profile');
@@ -293,50 +350,90 @@ export const authService = {
 
       const credential = await signInWithPopup(auth, provider);
       const firebaseUser = credential.user;
+      const idToken = await firebaseUser.getIdToken();
 
-      // Check if profile already exists in Firestore
-      let profile = await fetchUserProfile(firebaseUser.uid);
-
-      if (!profile) {
-        // New Google user — check if email is an assigned caretaker
-        const isCaretaker = await checkIsAssignedCaretaker(firebaseUser.email || '');
-        const resolvedRole = isCaretaker ? 'Caretaker' : ((role as UserProfile['role']) || 'Patient');
-        let patientId: string | undefined;
-        if (resolvedRole === 'Patient' || resolvedRole === 'Guardian') {
-          patientId = await generatePatientId();
+      // 1. Check Firestore for an existing profile (has their registered role)
+      const userRef = doc(db, 'users', firebaseUser.uid);
+      let existingFirestoreData: UserProfile | null = null;
+      try {
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          existingFirestoreData = snap.data() as UserProfile;
         }
-
-        const newProfile: Omit<UserProfile, 'id'> & { createdAt: any } = {
-          name: firebaseUser.displayName || 'Google User',
-          email: firebaseUser.email || '',
-          phone: firebaseUser.phoneNumber || '',
-          hospitalName: HOSPITAL_NAME,
-          role: resolvedRole,
-          patientId,
-          createdAt: serverTimestamp() as any,
-        };
-        await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-
-        if (resolvedRole === 'Patient' && patientId) {
-          await setDoc(doc(db, 'patientRecords', firebaseUser.uid), {
-            uid: firebaseUser.uid,
-            patientId,
-            name: newProfile.name,
-            email: newProfile.email,
-            phone: newProfile.phone,
-            createdAt: serverTimestamp(),
-          });
-        }
-
-        profile = { id: firebaseUser.uid, ...newProfile, createdAt: new Date().toISOString() };
-      } else {
-        profile = { ...profile, id: firebaseUser.uid };
+      } catch (fsErr) {
+        console.warn('Firestore read in googleAuth:', fsErr);
       }
 
+      // 2. Call backend — pass existing role so the backend doesn't overwrite it
+      //    For brand-new accounts, default to 'Patient' (never 'Admin' via Google)
+      const roleHintForNewAccount = existingFirestoreData?.role || 'Patient';
+      let backendUser: any = null;
+      try {
+        const res = await api.post('/api/auth/google', { idToken, role: roleHintForNewAccount });
+        if (res.data?.success && res.data.user) {
+          backendUser = res.data.user;
+          if (res.data.accessToken) {
+            localStorage.setItem('medtrace_access_token', res.data.accessToken);
+          }
+        }
+      } catch (bErr) {
+        console.warn('Backend Google Auth issue:', bErr);
+      }
+
+      // 3. Authoritative role: FIRESTORE > backend DB > default Patient
+      //    Firestore is the source of truth because that's where registration writes the role.
+      //    Backend MongoDB may not have these users or may have a stale/default role.
+      const isRegistration = Boolean(registrationDetails);
+      const effectiveRole: string =
+        existingFirestoreData?.role || registrationDetails?.role || _role || backendUser?.role || 'Patient';
+
+      let patientId = existingFirestoreData?.patientId;
+      if (!patientId && (effectiveRole === 'Patient' || effectiveRole === 'Guardian')) {
+        patientId = await generatePatientId().catch(() => `MT-2026-${Math.floor(100000 + Math.random() * 900000)}`);
+      }
+
+      const updatedProfile: UserProfile = {
+        id: backendUser?.id || firebaseUser.uid,
+        name: registrationDetails?.name || firebaseUser.displayName || backendUser?.name || existingFirestoreData?.name || 'Google User',
+        email: firebaseUser.email || backendUser?.email || existingFirestoreData?.email || '',
+        phone: registrationDetails?.phone || firebaseUser.phoneNumber || backendUser?.phone || existingFirestoreData?.phone || '',
+        hospitalName: HOSPITAL_NAME,
+        role: effectiveRole as UserProfile['role'],
+        patientId,
+        status: existingFirestoreData?.status || (isRegistration && ['Doctor', 'Nurse'].includes(effectiveRole) ? 'pending' : 'approved'),
+        specialization: registrationDetails?.specialization || existingFirestoreData?.specialization,
+        licenseNumber: registrationDetails?.licenseNumber || existingFirestoreData?.licenseNumber,
+        registeredDate: registrationDetails?.registeredDate || existingFirestoreData?.registeredDate,
+        registrationDate: registrationDetails?.registrationDate || existingFirestoreData?.registrationDate,
+        approvedAt: existingFirestoreData?.approvedAt,
+        approvedBy: existingFirestoreData?.approvedBy,
+        createdAt: existingFirestoreData?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 4. Persist to Firestore (merge — never wipe existing fields)
+      const firestoreProfile = Object.fromEntries(
+        Object.entries(updatedProfile).filter(([, value]) => value !== undefined)
+      );
+      await setDoc(userRef, {
+        ...firestoreProfile,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+
+      localStorage.setItem('medtrace_user', JSON.stringify(updatedProfile));
+      if (!isRegistration && !isApprovedProfessional(updatedProfile)) {
+        await signOut(auth).catch(() => {});
+        return {
+          success: false,
+          message: updatedProfile.status === 'rejected'
+            ? 'Your professional account was not approved. Please contact an administrator.'
+            : 'Your professional account is awaiting administrator approval.',
+        };
+      }
       return {
         success: true,
         message: 'Google authentication successful',
-        user: profile,
+        user: updatedProfile,
       };
     } catch (error: any) {
       return {
@@ -366,7 +463,14 @@ export const authService = {
   updateProfile: async (uid: string, updates: Partial<UserProfile>): Promise<AuthResponse> => {
     try {
       const ref = doc(db, 'users', uid);
-      await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() });
+      await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() }).catch(() => {});
+      const cached = localStorage.getItem('medtrace_user');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          localStorage.setItem('medtrace_user', JSON.stringify({ ...parsed, ...updates }));
+        } catch {}
+      }
       return { success: true, message: 'Profile updated successfully.' };
     } catch (error: any) {
       return { success: false, message: firebaseErrorMessage(error) };
@@ -375,6 +479,15 @@ export const authService = {
 
   // ── Logout ────────────────────────────────────────────────────────────────────
   logout: async (): Promise<void> => {
-    await signOut(auth);
+    try {
+      await api.post('/api/auth/logout').catch(() => {});
+    } catch {}
+    try {
+      await signOut(auth).catch(() => {});
+    } catch {}
+    localStorage.removeItem('medtrace_access_token');
+    localStorage.removeItem('medtrace_user');
+    localStorage.removeItem('token');
   },
 };
+

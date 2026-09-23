@@ -45,23 +45,29 @@ const loginSchema = yup.object().shape({
   rememberMe: yup.boolean().default(false),
 });
 
-// ─── Capability list rendered in the left panel ──────────────────────────────
+export const getRoleDashboardUrl = (role?: string): string => {
+  const r = (role || 'patient').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (r === 'admin' || r === 'administrator' || r === 'hospital admin' || r === 'hospital administrator') {
+    return '/dashboard/admin';
+  }
+  if (r === 'doctor' || r === 'nurse') return '/dashboard/doctor';
+  if (r === 'caretaker' || r === 'caregiver') return '/dashboard/caretaker';
+  return '/dashboard/patient';
+};
+
+// ─── Capability highlights for left panel ─────────────────────────────────────
 const CAPABILITIES = [
   {
-    icon: <MonitorHeart sx={{ fontSize: 18, color: '#1565C0' }} />,
-    label: 'Real-time IoT Respiratory Monitoring',
+    icon: <DocumentScanner sx={{ fontSize: 18, color: '#1565C0' }} />,
+    label: 'OCR & Multi-modal Clinical Parsing',
   },
   {
-    icon: <DocumentScanner sx={{ fontSize: 18, color: '#1565C0' }} />,
-    label: 'AI-Powered Medical Report Analysis',
+    icon: <MonitorHeart sx={{ fontSize: 18, color: '#1565C0' }} />,
+    label: 'Real-time AI Vital Risk Analysis',
   },
   {
     icon: <Sensors sx={{ fontSize: 18, color: '#1565C0' }} />,
     label: 'Wi-Fi CSI Contactless Ward Sensing',
-  },
-  {
-    icon: <VerifiedUser sx={{ fontSize: 18, color: '#1565C0' }} />,
-    label: 'HIPAA-Compliant Data Handling',
   },
 ];
 
@@ -79,6 +85,7 @@ export const LoginPage: React.FC = () => {
   const {
     control,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm({
     resolver: yupResolver(loginSchema),
@@ -97,9 +104,8 @@ export const LoginPage: React.FC = () => {
       const res = await login(data);
       if (res.success && res.user) {
         setSnackbarMessage('Login successful! Redirecting...');
-        const userRole = res.user?.role || 'patient';
-        const roleSlug = userRole.toLowerCase().replace(/\s+/g, '-');
-        setTimeout(() => navigate(`/dashboard/${roleSlug}`), 800);
+        const targetUrl = getRoleDashboardUrl(res.user?.role);
+        setTimeout(() => navigate(targetUrl), 800);
       } else {
         setErrorMessage(res.message || 'Login failed. Please check your credentials.');
       }
@@ -110,16 +116,16 @@ export const LoginPage: React.FC = () => {
     }
   };
 
+  // Google login: role is determined by what was stored at registration — never passed from UI
   const handleGoogleSignIn = async () => {
     setSubmitting(true);
     setErrorMessage(null);
     try {
       const res = await googleLogin();
       if (res.success && res.user) {
-        setSnackbarMessage('Google Authentication Successful!');
-        const userRole = res.user?.role || 'patient';
-        const roleSlug = userRole.toLowerCase().replace(/\s+/g, '-');
-        setTimeout(() => navigate(`/dashboard/${roleSlug}`), 800);
+        setSnackbarMessage('Google Sign-In successful! Redirecting...');
+        const targetUrl = getRoleDashboardUrl(res.user?.role);
+        setTimeout(() => navigate(targetUrl), 800);
       } else {
         setErrorMessage(res.message || 'Google Login failed');
       }
@@ -268,13 +274,38 @@ export const LoginPage: React.FC = () => {
               {/* Form body */}
               <Box sx={{ p: { xs: 3, sm: 5 } }}>
                 <CardContent sx={{ p: 0 }}>
-                  <Box mb={3}>
+                  <Box mb={2.5}>
                     <Typography variant="h5" sx={{ fontWeight: 700, color: '#1A2B4A', mb: 0.5 }}>
                       Sign In
                     </Typography>
-                    <Typography variant="body2" sx={{ color: '#546E7A' }}>
+                    <Typography variant="body2" sx={{ color: '#546E7A', mb: 1.5 }}>
                       Access your MedTrace clinical workspace
                     </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography variant="caption" sx={{ color: '#90A4AE', fontWeight: 600 }}>
+                        Demo Quick-Fill:
+                      </Typography>
+                      <Chip
+                        label="Doctor (Dr. Sarah)"
+                        size="small"
+                        clickable
+                        onClick={() => {
+                          setValue('email', 'doctor.demo@medtrace.ai', { shouldValidate: true });
+                          setValue('password', 'Password123!', { shouldValidate: true });
+                        }}
+                        sx={{ fontSize: '0.75rem', fontWeight: 600, backgroundColor: '#E3F2FD', color: '#1565C0' }}
+                      />
+                      <Chip
+                        label="Patient (John Doe)"
+                        size="small"
+                        clickable
+                        onClick={() => {
+                          setValue('email', 'patient.demo@medtrace.ai', { shouldValidate: true });
+                          setValue('password', 'Password123!', { shouldValidate: true });
+                        }}
+                        sx={{ fontSize: '0.75rem', fontWeight: 600, backgroundColor: '#E8F5E9', color: '#2E7D32' }}
+                      />
+                    </Box>
                   </Box>
 
                   {errorMessage && (
@@ -411,7 +442,7 @@ export const LoginPage: React.FC = () => {
                       </Typography>
                     </Divider>
 
-                    {/* Google SSO */}
+                    {/* Google SSO — role is resolved from the user's registered profile, not selected here */}
                     <Button
                       fullWidth
                       variant="outlined"
@@ -421,8 +452,8 @@ export const LoginPage: React.FC = () => {
                       sx={{
                         py: 1.3,
                         borderColor: '#CFD8DC',
-                        color: '#374151',
-                        fontWeight: 500,
+                        color: '#1E293B',
+                        fontWeight: 600,
                         backgroundColor: '#FFFFFF',
                         '&:hover': {
                           borderColor: '#1565C0',
@@ -430,7 +461,7 @@ export const LoginPage: React.FC = () => {
                         },
                       }}
                     >
-                      Sign in with Google
+                      {submitting ? <CircularProgress size={20} color="inherit" /> : 'Continue with Google'}
                     </Button>
                   </form>
 

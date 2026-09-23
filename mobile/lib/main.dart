@@ -37,7 +37,7 @@ final GoRouter _router = GoRouter(
       path: '/dashboard/:roleName',
       builder: (context, state) {
         final role = state.pathParameters['roleName'] ?? 'patient';
-        return RoleDashboardScreen(roleName: role);
+        return dashboardForRole(role);
       },
     ),
   ],

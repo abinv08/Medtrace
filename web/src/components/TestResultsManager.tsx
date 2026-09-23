@@ -497,7 +497,16 @@ export const TestResultsManager: React.FC<TestResultsManagerProps> = ({ patientI
                         sx={{ backgroundColor: '#F1F5F9', color: '#334155', fontSize: '0.72rem', fontWeight: 700 }}
                       />
 
-                      <Button
+                      {test.status === 'requested' && (
+                        <Chip
+                          label="PENDING"
+                          size="small"
+                          color="warning"
+                          sx={{ fontSize: '0.72rem', fontWeight: 800 }}
+                        />
+                      )}
+
+                      {test.status !== 'requested' && test.fileUrl && <Button
                         variant="contained"
                         size="small"
                         startIcon={isDownloading ? <CircularProgress size={14} color="inherit" /> : <Download />}
@@ -519,7 +528,7 @@ export const TestResultsManager: React.FC<TestResultsManagerProps> = ({ patientI
                         }}
                       >
                         {isDownloading ? 'Downloading...' : 'Download'}
-                      </Button>
+                      </Button>}
                     </Box>
                   </Box>
                 </AccordionSummary>
@@ -593,7 +602,7 @@ export const TestResultsManager: React.FC<TestResultsManagerProps> = ({ patientI
                       )}
                     </Box>
 
-                    <Button
+                    {test.status !== 'requested' && test.fileUrl && <Button
                       size="small"
                       startIcon={isDownloading ? <CircularProgress size={12} color="inherit" /> : <Download />}
                       onClick={() => handleDownload(test)}
@@ -607,7 +616,7 @@ export const TestResultsManager: React.FC<TestResultsManagerProps> = ({ patientI
                       }}
                     >
                       {isDownloading ? 'Downloading...' : 'Download File'}
-                    </Button>
+                    </Button>}
                   </Box>
                 </AccordionDetails>
               </Accordion>

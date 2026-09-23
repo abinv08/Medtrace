@@ -1,4 +1,6 @@
 # Local env files
 *.local
+/web/.env
+/web/dist/
 .env.local
 .env.*.local

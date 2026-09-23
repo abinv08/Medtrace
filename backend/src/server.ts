@@ -11,16 +11,36 @@ import testResultRoutes from './routes/testResultRoutes';
 import caretakerRoutes from './routes/caretakerRoutes';
 import adminRoutes from './routes/adminRoutes';
 import exercisePlanRoutes from './routes/exercisePlanRoutes';
+import clinicalNoteRoutes from './routes/clinicalNoteRoutes';
+import messageRoutes from './routes/messageRoutes';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS configuration for React Web & mobile clients
+// Allow the React dev server and Flutter web's changing local dev ports.
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const configuredOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:3000')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+      const isLocalDevelopmentOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
+      if (configuredOrigins.includes(origin) || isLocalDevelopmentOrigin) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Origin not allowed by CORS'));
+    },
     credentials: true,
   })
 );
@@ -38,6 +58,8 @@ app.use('/api/test-results', testResultRoutes);
 app.use('/api/caretaker', caretakerRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/exercise-plans', exercisePlanRoutes);
+app.use('/api/clinical-notes', clinicalNoteRoutes);
+app.use('/api/messages', messageRoutes);
 
 // System Health Endpoint
 app.get('/api/health', (req: Request, res: Response) => {

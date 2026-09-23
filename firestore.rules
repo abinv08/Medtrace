@@ -1,0 +1,67 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Users collection ───────────────────────────────────────────────────────
+    // Each document ID is the Firebase UID.
+    match /users/{userId} {
+      // A logged-in user can always read and write their own document.
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // Allow any authenticated user to read another user's document by UID
+      // (needed for doctor → patient look-ups, caretaker assignments, etc.)
+      allow read: if request.auth != null;
+
+      // Hospital administrators can approve, reject, or manage user profiles.
+      allow update: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['Admin', 'Hospital Administrator']
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved';
+    }
+
+    // ── Appointments ───────────────────────────────────────────────────────────
+    match /appointments/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Vitals ─────────────────────────────────────────────────────────────────
+    match /vitals/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Medications ────────────────────────────────────────────────────────────
+    match /medications/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Test results ───────────────────────────────────────────────────────────
+    match /testResults/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Medical reports ────────────────────────────────────────────────────────
+    match /medicalReports/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Caretaker assignments ──────────────────────────────────────────────────
+    match /caretakerAssignments/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Exercise plans ─────────────────────────────────────────────────────────
+    match /exercisePlans/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── System counters (patient ID generator, etc.) ───────────────────────────
+    match /system/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Catch-all: deny everything else ───────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

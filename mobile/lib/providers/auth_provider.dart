@@ -17,6 +17,10 @@ class AuthProvider extends ChangeNotifier {
   bool get isAuthenticated => _currentUser != null;
   String? get errorMessage => _errorMessage;
 
+  Future<String?> getAccessToken() async {
+    return FirebaseAuth.instance.currentUser?.getIdToken();
+  }
+
   AuthProvider() {
     _initAuthListener();
   }

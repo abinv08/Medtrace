@@ -163,52 +163,6 @@ export const rejectDoctor = async (doctorUid: string, adminId: string, reason: s
   });
 };
 
-// ─── Default Sample Patients for instant discovery ────────────────────────────
-export const DEFAULT_PATIENTS: PatientSearchResult[] = [
-  {
-    uid: 'patient-1',
-    patientId: 'MT-2026-000001',
-    name: 'Johnathan Doe',
-    email: 'johnathan.doe@example.com',
-    phone: '+1 (555) 234-5678',
-    dateOfBirth: '1984-06-15',
-    gender: 'Male',
-    bloodGroup: 'O+',
-    chronicConditions: 'Hypertension, Borderline Glucose',
-    allergies: 'Penicillin, Peanuts',
-    createdAt: '2026-01-10T08:00:00.000Z',
-    reportCount: 3,
-  },
-  {
-    uid: 'patient-2',
-    patientId: 'MT-2026-000002',
-    name: 'Jane Smith',
-    email: 'jane.smith@example.com',
-    phone: '+1 (555) 345-6789',
-    dateOfBirth: '1990-11-22',
-    gender: 'Female',
-    bloodGroup: 'A+',
-    chronicConditions: 'Type 2 Diabetes',
-    allergies: 'Sulfa Drugs',
-    createdAt: '2026-01-14T09:30:00.000Z',
-    reportCount: 2,
-  },
-  {
-    uid: 'patient-3',
-    patientId: 'MT-2026-000003',
-    name: 'Robert Davis',
-    email: 'robert.davis@example.com',
-    phone: '+1 (555) 456-7890',
-    dateOfBirth: '1975-03-08',
-    gender: 'Male',
-    bloodGroup: 'B+',
-    chronicConditions: 'Asthma, Mild Hyperlipidemia',
-    allergies: 'None',
-    createdAt: '2026-01-20T11:15:00.000Z',
-    reportCount: 1,
-  },
-];
-
 // ─── Fetch all patients (Doctor/Hospital) ─────────────────────────────────────
 export const fetchAllPatients = async (): Promise<PatientSearchResult[]> => {
   try {
@@ -239,17 +193,12 @@ export const fetchAllPatients = async (): Promise<PatientSearchResult[]> => {
           return r === 'patient' || r === 'guardian' || !d.role;
         });
 
-      if (livePatients.length > 0) {
-        // Merge with DEFAULT_PATIENTS if not already in list
-        const ids = new Set(livePatients.map((p) => (p.patientId || '').toLowerCase()));
-        const extraDefaults = DEFAULT_PATIENTS.filter((dp) => !ids.has(dp.patientId.toLowerCase()));
-        return [...livePatients, ...extraDefaults];
-      }
+      return livePatients;
     }
-    return DEFAULT_PATIENTS;
+    return [];
   } catch (err) {
-    console.warn('fetchAllPatients fallback to default records:', err);
-    return DEFAULT_PATIENTS;
+    console.warn('fetchAllPatients failed:', err);
+    return [];
   }
 };
 
@@ -285,13 +234,11 @@ export const fetchPatientProfile = async (uid: string): Promise<PatientSearchRes
   try {
     const snap = await getDoc(doc(db, 'users', uid));
     if (!snap.exists()) {
-      const fallback = DEFAULT_PATIENTS.find((p) => p.uid === uid || p.patientId === uid);
-      return fallback || null;
+      return null;
     }
     return { uid: snap.id, ...snap.data() } as PatientSearchResult;
   } catch {
-    const fallback = DEFAULT_PATIENTS.find((p) => p.uid === uid || p.patientId === uid);
-    return fallback || null;
+    return null;
   }
 };
 

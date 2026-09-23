@@ -44,14 +44,23 @@ const TestResultSchema = new mongoose_1.Schema({
     },
     fileUrl: {
         type: String,
-        required: true,
+        required: false,
         trim: true,
+    },
+    status: {
+        type: String,
+        enum: ['requested', 'completed'],
+        default: 'completed',
     },
     fileType: {
         type: String,
         trim: true,
     },
     uploadedBy: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    requestedBy: {
         type: mongoose_1.Schema.Types.ObjectId,
         ref: 'User',
     },

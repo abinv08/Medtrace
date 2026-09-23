@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
+
+const firebaseTokenVerifier = new OAuth2Client();
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'medtrace-76eb8';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -29,8 +33,40 @@ export const authenticateJWT = (
     req.user = decoded;
     next();
   } catch (error) {
-    res.status(403).json({ success: false, message: 'Invalid or expired access token' });
+    verifyFirebaseToken(token)
+      .then((decoded) => {
+        req.user = {
+          id: decoded.userId,
+          email: decoded.email,
+          role: decoded.role,
+        };
+        next();
+      })
+      .catch(() => {
+        res.status(403).json({ success: false, message: 'Invalid or expired access token' });
+      });
   }
+};
+
+const verifyFirebaseToken = async (
+  token: string
+): Promise<{ userId: string; email: string; role: string }> => {
+  const ticket = await firebaseTokenVerifier.verifyIdToken({
+    idToken: token,
+    audience: firebaseProjectId,
+  });
+  const payload = ticket.getPayload();
+  if (!payload?.sub || payload.aud !== firebaseProjectId) {
+    throw new Error('Invalid Firebase token claims');
+  }
+
+  const claims = payload as typeof payload & { role?: unknown };
+
+  return {
+    userId: payload.sub,
+    email: payload.email || '',
+    role: typeof claims.role === 'string' ? claims.role : 'Patient',
+  };
 };
 
 export const requireRole = (...allowedRoles: string[]) => {

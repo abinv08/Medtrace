@@ -90,10 +90,11 @@ export const fetchPatientAppointments = async (patientId: string): Promise<Appoi
 /**
  * Fetch appointments for a doctor using GET /api/appointments?doctorId=:doctorId
  */
-export const fetchDoctorAppointments = async (doctorId?: string, doctorName?: string): Promise<Appointment[]> => {
+export const fetchDoctorAppointments = async (doctorId?: string, doctorName?: string, status?: Appointment['status']): Promise<Appointment[]> => {
   try {
     const params: Record<string, string> = {};
     if (doctorId) params.doctorId = doctorId;
+    if (status) params.status = status;
 
     const res = await api.get('/api/appointments', { params });
     if (res.data?.success && Array.isArray(res.data?.appointments)) {

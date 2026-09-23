@@ -5,6 +5,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireHospitalAdmin = exports.requireRole = exports.authenticateJWT = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const google_auth_library_1 = require("google-auth-library");
+const firebaseTokenVerifier = new google_auth_library_1.OAuth2Client();
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'medtrace-76eb8';
 const authenticateJWT = (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -19,10 +22,37 @@ const authenticateJWT = (req, res, next) => {
         next();
     }
     catch (error) {
-        res.status(403).json({ success: false, message: 'Invalid or expired access token' });
+        verifyFirebaseToken(token)
+            .then((decoded) => {
+            req.user = {
+                id: decoded.userId,
+                email: decoded.email,
+                role: decoded.role,
+            };
+            next();
+        })
+            .catch(() => {
+            res.status(403).json({ success: false, message: 'Invalid or expired access token' });
+        });
     }
 };
 exports.authenticateJWT = authenticateJWT;
+const verifyFirebaseToken = async (token) => {
+    const ticket = await firebaseTokenVerifier.verifyIdToken({
+        idToken: token,
+        audience: firebaseProjectId,
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.sub || payload.aud !== firebaseProjectId) {
+        throw new Error('Invalid Firebase token claims');
+    }
+    const claims = payload;
+    return {
+        userId: payload.sub,
+        email: payload.email || '',
+        role: typeof claims.role === 'string' ? claims.role : 'Patient',
+    };
+};
 const requireRole = (...allowedRoles) => {
     return (req, res, next) => {
         if (!req.user || !req.user.role) {

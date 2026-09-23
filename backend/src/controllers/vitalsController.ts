@@ -1,10 +1,32 @@
 import { Response } from 'express';
 import mongoose from 'mongoose';
 import { Vitals, IVitals } from '../models/Vitals';
+import { Patient } from '../models/Patient';
 import { AuthenticatedRequest } from '../middleware/authMiddleware';
 
 // In-Memory Fallback Store if MongoDB is disconnected
 const memoryVitals: any[] = [];
+
+// Helper to resolve patientId (User ID vs Patient document ID)
+const resolvePatientIds = async (patientId: string): Promise<string[]> => {
+  const ids = [patientId];
+  try {
+    if (mongoose.isValidObjectId(patientId)) {
+      const patientDoc = await Patient.findById(patientId);
+      if (patientDoc) {
+        if (patientDoc.userId) ids.push(patientDoc.userId.toString());
+      } else {
+        const patientByUser = await Patient.findOne({ userId: patientId });
+        if (patientByUser) {
+          ids.push(patientByUser._id.toString());
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return Array.from(new Set(ids));
+};
 
 // POST /api/vitals - Add a new vitals reading
 export const createVitals = async (
@@ -28,9 +50,27 @@ export const createVitals = async (
       return;
     }
 
+    let resolvedPatientId = patientId;
+    try {
+      if (mongoose.isValidObjectId(patientId)) {
+        const pDoc = await Patient.findById(patientId);
+        if (pDoc) {
+          resolvedPatientId = pDoc._id;
+        } else {
+          let pByUser = await Patient.findOne({ userId: patientId });
+          if (!pByUser) {
+            pByUser = await Patient.create({ userId: patientId, assignedCaretakers: [] });
+          }
+          resolvedPatientId = pByUser._id;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     let newVitals: any = null;
     const vitalsData = {
-      patientId,
+      patientId: resolvedPatientId,
       heartRate,
       spo2,
       bloodPressureSystolic,
@@ -48,6 +88,7 @@ export const createVitals = async (
         _id: id,
         id,
         ...vitalsData,
+        patientId,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -58,6 +99,7 @@ export const createVitals = async (
       success: true,
       message: 'Vitals recorded successfully',
       vitals: newVitals,
+
     });
   } catch (error: any) {
     res.status(500).json({
@@ -77,7 +119,10 @@ export const getVitalsHistory = async (
     const { patientId } = req.params;
     const { from, to, limit } = req.query;
 
-    const filter: any = { patientId };
+    const patientIds = await resolvePatientIds(patientId);
+    const filter: any = {
+      patientId: { $in: patientIds },
+    };
 
     if (from || to) {
       filter.recordedAt = {};
@@ -98,7 +143,8 @@ export const getVitalsHistory = async (
       history = await query.exec();
     } catch {
       history = memoryVitals.filter((item) => {
-        if (item.patientId?.toString() !== patientId.toString()) return false;
+        const itemPId = item.patientId?.toString();
+        if (!patientIds.includes(itemPId)) return false;
         const recTime = new Date(item.recordedAt).getTime();
         if (from && recTime < new Date(from as string).getTime()) return false;
         if (to && recTime > new Date(to as string).getTime()) return false;
@@ -131,13 +177,14 @@ export const getLatestVitals = async (
 ): Promise<void> => {
   try {
     const { patientId } = req.params;
+    const patientIds = await resolvePatientIds(patientId);
 
     let latest: any = null;
     try {
-      latest = await Vitals.findOne({ patientId }).sort({ recordedAt: -1 });
+      latest = await Vitals.findOne({ patientId: { $in: patientIds } }).sort({ recordedAt: -1 });
     } catch {
       const patientRecords = memoryVitals
-        .filter((item) => item.patientId?.toString() === patientId.toString())
+        .filter((item) => patientIds.includes(item.patientId?.toString()))
         .sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
       latest = patientRecords[0] || null;
     }
@@ -162,3 +209,4 @@ export const getLatestVitals = async (
     });
   }
 };
+

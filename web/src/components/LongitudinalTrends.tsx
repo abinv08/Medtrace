@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -15,6 +15,7 @@ import {
   MenuItem,
   CircularProgress,
   Tooltip,
+  Alert,
 } from '@mui/material';
 import {
   Favorite,
@@ -41,6 +42,7 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from 'recharts';
+import api from '../services/api';
 import {
   VitalReading,
   addVitalReading,
@@ -50,8 +52,8 @@ import {
 
 interface LongitudinalTrendsProps {
   patientId: string;
-  vitals: VitalReading[];
-  onVitalsUpdated: () => void;
+  vitals?: VitalReading[];
+  onVitalsUpdated?: () => void;
   onAnomalyDetected?: (anomalies: AnomalyAlert[]) => void;
 }
 
@@ -64,7 +66,10 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
   onAnomalyDetected,
 }) => {
   const [selectedMetric, setSelectedMetric] = useState<MetricType>('bp');
-  const [timeRange, setTimeRange] = useState<number>(30); // 7, 14, 30
+  const [timeRange, setTimeRange] = useState<number>(30); // 7, 14, 30 days
+  const [historicalVitals, setHistoricalVitals] = useState<VitalReading[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
   const [openLogModal, setOpenLogModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -77,13 +82,82 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
   const [formWeight, setFormWeight] = useState('75');
   const [formSource, setFormSource] = useState<'manual' | 'iot_monitor' | 'csi_sensor'>('manual');
 
-  // Filter vitals by time range
-  const filteredData = useMemo(() => {
-    if (vitals.length <= timeRange) return vitals;
-    return vitals.slice(vitals.length - timeRange);
-  }, [vitals, timeRange]);
+  // Fetch real historical vitals data from GET /api/vitals/:patientId with date-range query
+  const loadHistoricalVitals = useCallback(async () => {
+    if (!patientId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const now = new Date();
+      const fromDate = new Date(now.getTime() - timeRange * 24 * 60 * 60 * 1000).toISOString();
+      const toDate = now.toISOString();
 
-  const baselines = useMemo(() => getBaselineStatistics(vitals), [vitals]);
+      const response = await api.get(`/api/vitals/${encodeURIComponent(patientId)}`, {
+        params: {
+          from: fromDate,
+          to: toDate,
+        },
+      });
+
+      if (response.data?.success && Array.isArray(response.data.vitals)) {
+        const mapped: VitalReading[] = response.data.vitals.map((v: any) => {
+          const recDate = v.recordedAt ? new Date(v.recordedAt) : new Date();
+          const dateStr = !isNaN(recDate.getTime())
+            ? recDate.toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0];
+          const timeStr = !isNaN(recDate.getTime())
+            ? recDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : undefined;
+
+          return {
+            id: v._id || v.id || `vital-${Date.now()}`,
+            patientId: v.patientId,
+            date: dateStr,
+            time: timeStr,
+            systolicBP: v.bloodPressureSystolic ?? 120,
+            diastolicBP: v.bloodPressureDiastolic ?? 80,
+            heartRate: v.heartRate ?? 72,
+            glucoseFasting: v.glucoseFasting ?? v.glucose ?? undefined,
+            glucosePostPrandial: v.glucosePostPrandial ?? undefined,
+            spO2: v.spo2 ?? v.spO2 ?? 98,
+            weightKg: v.weightKg ?? v.weight ?? undefined,
+            bmi: v.bmi || (v.weightKg ? Number((v.weightKg / (1.75 * 1.75)).toFixed(1)) : undefined),
+            cholesterolTotal: v.cholesterolTotal ?? undefined,
+            source: v.source || 'manual',
+          };
+        });
+
+        // Chronological order for Recharts progression
+        mapped.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        setHistoricalVitals(mapped);
+      } else if (vitals && vitals.length > 0) {
+        setHistoricalVitals(vitals);
+      } else {
+        setHistoricalVitals([]);
+      }
+    } catch (err: any) {
+      console.error('Error fetching vitals history from backend:', err);
+      if (vitals && vitals.length > 0) {
+        setHistoricalVitals(vitals);
+      } else {
+        setError('Unable to load historical vitals from server');
+        setHistoricalVitals([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [patientId, timeRange, vitals]);
+
+  useEffect(() => {
+    loadHistoricalVitals();
+  }, [loadHistoricalVitals]);
+
+  // Vitals data filtered by active date-range query
+  const filteredData = useMemo(() => {
+    return historicalVitals;
+  }, [historicalVitals]);
+
+  const baselines = useMemo(() => getBaselineStatistics(filteredData), [filteredData]);
 
   // Format date tick
   const formatTick = (tickStr: string) => {
@@ -115,7 +189,10 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
         onAnomalyDetected(res.anomalies);
       }
       setOpenLogModal(false);
-      onVitalsUpdated();
+      await loadHistoricalVitals();
+      if (onVitalsUpdated) {
+        onVitalsUpdated();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -196,7 +273,7 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
             </Typography>
           </Box>
           <Typography variant="caption" sx={{ color: '#64748B', display: 'block', mt: 0.25 }}>
-            Continuous multi-metric physiological tracking & baseline trajectory
+            Continuous multi-metric physiological tracking & baseline trajectory (Live Backend)
           </Typography>
         </Box>
 
@@ -243,6 +320,12 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
           </Button>
         </Box>
       </Box>
+
+      {error && (
+        <Alert severity="warning" onClose={() => setError(null)} sx={{ mb: 2, borderRadius: '10px' }}>
+          {error}
+        </Alert>
+      )}
 
       {/* Metric Selector Tabs */}
       <Box display="flex" gap={1} overflow="auto" pb={1.5} mb={3}>
@@ -307,92 +390,113 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
 
       {/* Chart Canvas */}
       <Box sx={{ width: '100%', height: 340, mt: 1 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          {selectedMetric === 'bp' ? (
-            <AreaChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorSys" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#1565C0" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#1565C0" stopOpacity={0.0} />
-                </linearGradient>
-                <linearGradient id="colorDia" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#00838F" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#00838F" stopOpacity={0.0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={[50, 180]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mmHg" />
-              <RechartsTooltip
-                contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff', fontSize: '0.8rem' }}
-                labelFormatter={(label) => `Date: ${label}`}
-              />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              {/* Reference target bands */}
-              <ReferenceLine y={120} stroke="#059669" strokeDasharray="3 3" label={{ value: 'Systolic Target (120)', fill: '#059669', fontSize: 10 }} />
-              <ReferenceLine y={80} stroke="#00838F" strokeDasharray="3 3" label={{ value: 'Diastolic Target (80)', fill: '#00838F', fontSize: 10 }} />
-              <Area type="monotone" dataKey="systolicBP" name="Systolic BP" stroke="#1565C0" strokeWidth={2.5} fillOpacity={1} fill="url(#colorSys)" />
-              <Area type="monotone" dataKey="diastolicBP" name="Diastolic BP" stroke="#00838F" strokeWidth={2} fillOpacity={1} fill="url(#colorDia)" />
-            </AreaChart>
-          ) : selectedMetric === 'glucose' ? (
-            <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={[60, 200]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mg/dL" />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              <ReferenceLine y={100} stroke="#059669" strokeDasharray="3 3" label={{ value: 'Fasting Target (<100)', fill: '#059669', fontSize: 10 }} />
-              <Line type="monotone" dataKey="glucoseFasting" name="Fasting Glucose" stroke="#D97706" strokeWidth={2.5} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="glucosePostPrandial" name="Post-Prandial Glucose" stroke="#7C3AED" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 2 }} />
-            </LineChart>
-          ) : selectedMetric === 'heartRate' ? (
-            <AreaChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorHr" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#DC2626" stopOpacity={0.25} />
-                  <stop offset="95%" stopColor="#DC2626" stopOpacity={0.0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={[50, 130]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" bpm" />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              <ReferenceLine y={60} stroke="#64748B" strokeDasharray="3 3" />
-              <ReferenceLine y={100} stroke="#DC2626" strokeDasharray="3 3" label={{ value: 'Tachycardia Line (100)', fill: '#DC2626', fontSize: 10 }} />
-              <Area type="monotone" dataKey="heartRate" name="Resting Pulse" stroke="#DC2626" strokeWidth={2.5} fillOpacity={1} fill="url(#colorHr)" />
-            </AreaChart>
-          ) : selectedMetric === 'spO2' ? (
-            <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={[90, 100]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" %" />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              <ReferenceLine y={95} stroke="#DC2626" strokeDasharray="3 3" label={{ value: 'Hypoxemia Cutoff (<95%)', fill: '#DC2626', fontSize: 10 }} />
-              <Line type="monotone" dataKey="spO2" name="Blood Oxygen (SpO2)" stroke="#00838F" strokeWidth={2.5} dot={{ r: 3 }} />
-            </LineChart>
-          ) : selectedMetric === 'weight' ? (
-            <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: '#64748B' }} unit=" kg" />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              <Line type="monotone" dataKey="weightKg" name="Weight (kg)" stroke="#059669" strokeWidth={2.5} dot={{ r: 3 }} />
-            </LineChart>
-          ) : (
-            <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-              <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
-              <YAxis domain={[140, 260]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mg/dL" />
-              <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
-              <ReferenceLine y={200} stroke="#D97706" strokeDasharray="3 3" label={{ value: 'Desirable Limit (200)', fill: '#D97706', fontSize: 10 }} />
-              <Line type="monotone" dataKey="cholesterolTotal" name="Total Cholesterol" stroke="#7C3AED" strokeWidth={2.5} dot={{ r: 3 }} />
-            </LineChart>
-          )}
-        </ResponsiveContainer>
+        {loading ? (
+          <Box display="flex" justifyContent="center" alignItems="center" height="100%">
+            <CircularProgress size={32} />
+          </Box>
+        ) : filteredData.length === 0 ? (
+          <Box display="flex" flexDirection="column" justifyContent="center" alignItems="center" height="100%" gap={1}>
+            <Typography variant="body2" sx={{ color: '#64748B' }}>
+              No vitals recorded in the selected {timeRange}-day period.
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<Add />}
+              onClick={() => setOpenLogModal(true)}
+              sx={{ borderRadius: '999px', textTransform: 'none', mt: 1 }}
+            >
+              Log Current Vitals
+            </Button>
+          </Box>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            {selectedMetric === 'bp' ? (
+              <AreaChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorSys" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#1565C0" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#1565C0" stopOpacity={0.0} />
+                  </linearGradient>
+                  <linearGradient id="colorDia" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#00838F" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#00838F" stopOpacity={0.0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={[50, 180]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mmHg" />
+                <RechartsTooltip
+                  contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff', fontSize: '0.8rem' }}
+                  labelFormatter={(label) => `Date: ${label}`}
+                />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                {/* Reference target bands */}
+                <ReferenceLine y={120} stroke="#059669" strokeDasharray="3 3" label={{ value: 'Systolic Target (120)', fill: '#059669', fontSize: 10 }} />
+                <ReferenceLine y={80} stroke="#00838F" strokeDasharray="3 3" label={{ value: 'Diastolic Target (80)', fill: '#00838F', fontSize: 10 }} />
+                <Area type="monotone" dataKey="systolicBP" name="Systolic BP" stroke="#1565C0" strokeWidth={2.5} fillOpacity={1} fill="url(#colorSys)" />
+                <Area type="monotone" dataKey="diastolicBP" name="Diastolic BP" stroke="#00838F" strokeWidth={2} fillOpacity={1} fill="url(#colorDia)" />
+              </AreaChart>
+            ) : selectedMetric === 'glucose' ? (
+              <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={[60, 200]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mg/dL" />
+                <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                <ReferenceLine y={100} stroke="#059669" strokeDasharray="3 3" label={{ value: 'Fasting Target (<100)', fill: '#059669', fontSize: 10 }} />
+                <Line type="monotone" dataKey="glucoseFasting" name="Fasting Glucose" stroke="#D97706" strokeWidth={2.5} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="glucosePostPrandial" name="Post-Prandial Glucose" stroke="#7C3AED" strokeWidth={2} strokeDasharray="4 4" dot={{ r: 2 }} />
+              </LineChart>
+            ) : selectedMetric === 'heartRate' ? (
+              <AreaChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorHr" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#DC2626" stopOpacity={0.25} />
+                    <stop offset="95%" stopColor="#DC2626" stopOpacity={0.0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={[50, 130]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" bpm" />
+                <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                <ReferenceLine y={60} stroke="#64748B" strokeDasharray="3 3" />
+                <ReferenceLine y={100} stroke="#DC2626" strokeDasharray="3 3" label={{ value: 'Tachycardia Line (100)', fill: '#DC2626', fontSize: 10 }} />
+                <Area type="monotone" dataKey="heartRate" name="Resting Pulse" stroke="#DC2626" strokeWidth={2.5} fillOpacity={1} fill="url(#colorHr)" />
+              </AreaChart>
+            ) : selectedMetric === 'spO2' ? (
+              <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={[90, 100]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" %" />
+                <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                <ReferenceLine y={95} stroke="#DC2626" strokeDasharray="3 3" label={{ value: 'Hypoxemia Cutoff (<95%)', fill: '#DC2626', fontSize: 10 }} />
+                <Line type="monotone" dataKey="spO2" name="Blood Oxygen (SpO2)" stroke="#00838F" strokeWidth={2.5} dot={{ r: 3 }} />
+              </LineChart>
+            ) : selectedMetric === 'weight' ? (
+              <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: '#64748B' }} unit=" kg" />
+                <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                <Line type="monotone" dataKey="weightKg" name="Weight (kg)" stroke="#059669" strokeWidth={2.5} dot={{ r: 3 }} />
+              </LineChart>
+            ) : (
+              <LineChart data={filteredData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                <XAxis dataKey="date" tickFormatter={formatTick} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis domain={[140, 260]} tick={{ fontSize: 11, fill: '#64748B' }} unit=" mg/dL" />
+                <RechartsTooltip contentStyle={{ backgroundColor: '#1E293B', borderRadius: '8px', border: 'none', color: '#fff' }} />
+                <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '0.8rem', fontWeight: 600 }} />
+                <ReferenceLine y={200} stroke="#D97706" strokeDasharray="3 3" label={{ value: 'Desirable Limit (200)', fill: '#D97706', fontSize: 10 }} />
+                <Line type="monotone" dataKey="cholesterolTotal" name="Total Cholesterol" stroke="#7C3AED" strokeWidth={2.5} dot={{ r: 3 }} />
+              </LineChart>
+            )}
+          </ResponsiveContainer>
+        )}
       </Box>
 
       {/* Log Vital Dialog */}

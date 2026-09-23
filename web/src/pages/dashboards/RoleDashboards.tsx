@@ -23,8 +23,8 @@ export const RoleDashboard: React.FC = () => {
 
   if (loading || (user?.email && isCaretaker === null)) return null;
 
-  // Determine effective role from the authenticated user or email matching
-  const role = (user?.role || roleName || '').toLowerCase().replace(/-/g, ' ');
+  const role = (user?.role || roleName || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+
 
   if (role === 'caretaker' || role === 'caregiver' || isCaretaker) {
     return <CaretakerDashboard />;

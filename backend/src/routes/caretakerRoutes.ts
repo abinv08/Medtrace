@@ -3,6 +3,7 @@ import {
   assignCaretaker,
   revokeCaretakerAssignment,
   getAssignedPatients,
+  getPatientCaretakers,
 } from '../controllers/caretakerController';
 import { authenticateJWT } from '../middleware/authMiddleware';
 
@@ -20,4 +21,8 @@ router.put('/:id/revoke', revokeCaretakerAssignment);
 // Endpoint: GET /api/caretaker/:caretakerId/patients (list patients assigned to this caretaker)
 router.get('/:caretakerId/patients', getAssignedPatients);
 
+// Endpoint: GET /api/caretaker/patient/:patientId (list caretakers assigned to this patient)
+router.get('/patient/:patientId', getPatientCaretakers);
+
 export default router;
+

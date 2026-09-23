@@ -16,7 +16,7 @@ interface AuthContextType {
   loading: boolean;
   login: (payload: LoginPayload) => Promise<AuthResponse>;
   register: (payload: RegisterPayload) => Promise<AuthResponse>;
-  googleLogin: (role?: string) => Promise<AuthResponse>;
+  googleLogin: (role?: string, registrationDetails?: Partial<RegisterPayload>) => Promise<AuthResponse>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   getToken: () => Promise<string | null>;
@@ -35,24 +35,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (firebaseUser) {
         try {
           const idToken = await firebaseUser.getIdToken();
-          setToken(idToken);
-          localStorage.setItem('medtrace_access_token', idToken);
+          if (!localStorage.getItem('medtrace_access_token')) {
+            setToken(idToken);
+            localStorage.setItem('medtrace_access_token', idToken);
+          }
         } catch {
           // ignore
         }
-        // User is signed in — fetch their Firestore profile
-        const profile = await fetchUserProfile(firebaseUser.uid);
-        setUser(profile ? { ...profile, id: firebaseUser.uid } : null);
+        // User is signed in — try to fetch or update their profile
+        const profile = await fetchUserProfile(firebaseUser.uid).catch(() => null);
+        if (profile) {
+          setUser(profile);
+          localStorage.setItem('medtrace_user', JSON.stringify(profile));
+        }
       } else {
-        // User is signed out
         setUser(null);
         setToken(null);
         localStorage.removeItem('medtrace_access_token');
+        localStorage.removeItem('medtrace_user');
       }
       setLoading(false);
     });
 
-    // Cleanup subscription on unmount
     return () => unsubscribe();
   }, []);
 
@@ -65,18 +69,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem('medtrace_access_token', idToken);
         return idToken;
       } catch {
-        return token;
+        // ignore
       }
     }
-    return token || localStorage.getItem('medtrace_access_token');
+    const currentToken = localStorage.getItem('medtrace_access_token') || token;
+    return currentToken;
   };
 
-  // ─── Refresh user profile from Firestore ──────────────────────────────────
+  // ─── Refresh user profile ────────────────────────────────────────────────
   const refreshUser = async () => {
-    if (!auth.currentUser) return;
-    const profile = await fetchUserProfile(auth.currentUser.uid);
+    const uid = auth.currentUser?.uid || user?.id || '';
+    if (!uid) return;
+    const profile = await fetchUserProfile(uid);
     if (profile) {
-      setUser({ ...profile, id: auth.currentUser.uid });
+      setUser(profile);
+      localStorage.setItem('medtrace_user', JSON.stringify(profile));
     }
   };
 
@@ -85,10 +92,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await authService.login(payload);
     if (res.success && res.user) {
       setUser(res.user);
-      if (auth.currentUser) {
-        const idToken = await auth.currentUser.getIdToken();
-        setToken(idToken);
-        localStorage.setItem('medtrace_access_token', idToken);
+      const activeToken = localStorage.getItem('medtrace_access_token');
+      if (activeToken) {
+        setToken(activeToken);
+      } else if (auth.currentUser) {
+        const idToken = await auth.currentUser.getIdToken().catch(() => null);
+        if (idToken) {
+          setToken(idToken);
+          localStorage.setItem('medtrace_access_token', idToken);
+        }
       }
     }
     return res;
@@ -98,23 +110,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const res = await authService.register(payload);
     if (res.success && res.user) {
       setUser(res.user);
-      if (auth.currentUser) {
-        const idToken = await auth.currentUser.getIdToken();
-        setToken(idToken);
-        localStorage.setItem('medtrace_access_token', idToken);
+      const activeToken = localStorage.getItem('medtrace_access_token');
+      if (activeToken) {
+        setToken(activeToken);
+      } else if (auth.currentUser) {
+        const idToken = await auth.currentUser.getIdToken().catch(() => null);
+        if (idToken) {
+          setToken(idToken);
+          localStorage.setItem('medtrace_access_token', idToken);
+        }
       }
     }
     return res;
   };
 
-  const googleLogin = async (role?: string): Promise<AuthResponse> => {
-    const res = await authService.googleAuth(role);
+  const googleLogin = async (role?: string, registrationDetails?: Partial<RegisterPayload>): Promise<AuthResponse> => {
+    const res = await authService.googleAuth(role, registrationDetails);
     if (res.success && res.user) {
       setUser(res.user);
-      if (auth.currentUser) {
-        const idToken = await auth.currentUser.getIdToken();
-        setToken(idToken);
-        localStorage.setItem('medtrace_access_token', idToken);
+      const activeToken = localStorage.getItem('medtrace_access_token');
+      if (activeToken) {
+        setToken(activeToken);
+      } else if (auth.currentUser) {
+        const idToken = await auth.currentUser.getIdToken().catch(() => null);
+        if (idToken) {
+          setToken(idToken);
+          localStorage.setItem('medtrace_access_token', idToken);
+        }
       }
     }
     return res;
@@ -124,11 +146,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authService.logout();
     setUser(null);
     setToken(null);
-    localStorage.removeItem('medtrace_access_token');
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, googleLogin, logout, refreshUser, getToken }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        login,
+        register,
+        googleLogin,
+        logout,
+        refreshUser,
+        getToken,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -141,3 +174,4 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
+

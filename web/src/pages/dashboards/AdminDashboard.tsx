@@ -243,6 +243,8 @@ export const AdminDashboard: React.FC = () => {
     try {
       await approveDoctor(doctorId, user.id);
       await loadData();
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to approve doctor. Check Firestore permissions.');
     } finally {
       setProcessing(null);
     }

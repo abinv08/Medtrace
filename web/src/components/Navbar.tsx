@@ -30,6 +30,7 @@ import {
 } from '@mui/icons-material';
 import { MedTraceLogo } from './Logo';
 import { useAuth } from '../contexts/AuthContext';
+import { getRoleDashboardUrl } from '../pages/LoginPage';
 
 export const Navbar: React.FC = () => {
   const navigate = useNavigate();
@@ -38,8 +39,7 @@ export const Navbar: React.FC = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const getDashboardPath = () => {
-    if (!user?.role) return '/dashboard/patient';
-    return `/dashboard/${user.role.toLowerCase().replace(/\s+/g, '-')}`;
+    return getRoleDashboardUrl(user?.role);
   };
 
   const dashboardPath = getDashboardPath();

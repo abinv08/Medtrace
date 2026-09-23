@@ -32,6 +32,7 @@ import {
   CaretakerLink,
   fetchPatientCaretakers,
   assignCaretaker,
+  revokeCaretaker,
   removeCaretaker,
   triggerEmergencySOS,
 } from '../services/caretakerService';
@@ -51,22 +52,29 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
   const [loading, setLoading] = useState(true);
   const [openModal, setOpenModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [sosActive, setSosActive] = useState(false);
   const [sosFeedback, setSosFeedback] = useState<string | null>(null);
   const [assignFeedback, setAssignFeedback] = useState<{ message: string; mailtoLink?: string } | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Form state
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [caretakerIdInput, setCaretakerIdInput] = useState('');
   const [relationship, setRelationship] = useState<CaretakerLink['relationship']>('Spouse');
   const [accessLevel, setAccessLevel] = useState<CaretakerLink['accessLevel']>('Full Access (Vitals, Meds, Appointments)');
 
   const loadData = async () => {
     setLoading(true);
+    setErrorMessage(null);
     try {
-      const list = await fetchPatientCaretakers(patientId);
+      const list = await fetchPatientCaretakers(patientId, patientName);
       setCaretakers(list);
+    } catch (err: any) {
+      console.error('Failed to load caretakers:', err);
+      setErrorMessage('Unable to load caretaker network. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -79,13 +87,17 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
   const handleAssign = async () => {
     if (!name.trim() || !email.trim()) return;
     setSubmitting(true);
+    setErrorMessage(null);
     try {
       const assignedEmail = email.trim();
       const assignedName = name.trim();
+
+      // Calls backend: POST /api/caretaker/assign
       await assignCaretaker({
         patientId,
         patientName,
         patientPatientId,
+        caretakerId: caretakerIdInput.trim() || undefined,
         caretakerName: assignedName,
         caretakerEmail: assignedEmail,
         caretakerPhone: phone.trim(),
@@ -100,7 +112,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
       const mailtoUrl = `mailto:${assignedEmail}?subject=${subject}&body=${body}`;
 
       setAssignFeedback({
-        message: `Caretaker ${assignedName} (${assignedEmail}) assigned! When they log in or register with this email as a Caretaker, they will automatically see your Caretaker Dashboard.`,
+        message: `Caretaker ${assignedName} (${assignedEmail}) assigned successfully via POST /api/caretaker/assign! When they log in or register with this email as a Caretaker, they will automatically see your Caretaker Dashboard.`,
         mailtoLink: mailtoUrl,
       });
 
@@ -108,15 +120,32 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
       setName('');
       setEmail('');
       setPhone('');
+      setCaretakerIdInput('');
       await loadData();
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || 'Error assigning caretaker. Please check the details and try again.';
+      setErrorMessage(msg);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleRemove = async (id: string) => {
-    await removeCaretaker(id, patientId);
-    await loadData();
+  const handleRevoke = async (id: string, caretakerDisplayName?: string) => {
+    setRevokingId(id);
+    setErrorMessage(null);
+    try {
+      // Calls backend: PUT /api/caretaker/:id/revoke
+      await revokeCaretaker(id);
+      setAssignFeedback({
+        message: `Caretaker assignment${caretakerDisplayName ? ` for ${caretakerDisplayName}` : ''} was revoked successfully via PUT /api/caretaker/:id/revoke.`,
+      });
+      await loadData();
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || 'Failed to revoke caretaker access.';
+      setErrorMessage(msg);
+    } finally {
+      setRevokingId(null);
+    }
   };
 
   const handleTriggerSOS = async () => {
@@ -226,6 +255,16 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
           </Button>
         </Box>
 
+        {errorMessage && (
+          <Alert
+            severity="error"
+            onClose={() => setErrorMessage(null)}
+            sx={{ mb: 3, borderRadius: '12px' }}
+          >
+            {errorMessage}
+          </Alert>
+        )}
+
         {assignFeedback && (
           <Alert
             severity="success"
@@ -253,9 +292,11 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
         {loading ? (
           <Box display="flex" justifyContent="center" py={4}><CircularProgress size={32} /></Box>
         ) : caretakers.length === 0 ? (
-          <Typography variant="body2" sx={{ color: '#64748B', py: 4, textAlign: 'center' }}>
-            No caretakers assigned yet. Click "Assign Caretaker" to add family oversight.
-          </Typography>
+          <Box py={4} textAlign="center">
+            <Typography variant="body2" sx={{ color: '#64748B' }}>
+              No caretakers assigned yet. Click "Assign Caretaker" to add family oversight.
+            </Typography>
+          </Box>
         ) : (
           <Grid container spacing={2}>
             {caretakers.map((care) => (
@@ -272,7 +313,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
                   <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={1.5}>
                     <Box display="flex" alignItems="center" gap={1.5}>
                       <Avatar sx={{ width: 44, height: 44, backgroundColor: '#EFF6FF', color: '#1565C0', fontWeight: 800 }}>
-                        {care.caretakerName?.charAt(0)}
+                        {care.caretakerName?.charAt(0) || 'C'}
                       </Avatar>
                       <Box>
                         <Box display="flex" alignItems="center" gap={1}>
@@ -291,10 +332,21 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
                       </Box>
                     </Box>
 
-                    <Tooltip title="Remove Caretaker">
-                      <IconButton size="small" onClick={() => handleRemove(care.id)} sx={{ color: '#94A3B8', '&:hover': { color: '#EF4444' } }}>
-                        <DeleteOutline sx={{ fontSize: 18 }} />
-                      </IconButton>
+                    <Tooltip title="Revoke Caretaker Access">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={() => handleRevoke(care.id, care.caretakerName)}
+                          disabled={revokingId === care.id}
+                          sx={{ color: '#94A3B8', '&:hover': { color: '#EF4444' } }}
+                        >
+                          {revokingId === care.id ? (
+                            <CircularProgress size={18} color="error" />
+                          ) : (
+                            <DeleteOutline sx={{ fontSize: 18 }} />
+                          )}
+                        </IconButton>
+                      </span>
                     </Tooltip>
                   </Box>
 
@@ -328,7 +380,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
         <DialogTitle sx={{ fontWeight: 800, color: '#1E293B' }}>Assign Caretaker / Family Guardian</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ color: '#64748B', mb: 3 }}>
-            Authorize a family member or caregiver to monitor vitals, receive anomaly alerts, and oversee prescriptions.
+            Authorize a family member or caregiver to monitor vitals, receive anomaly alerts, and oversee prescriptions via MedTrace Care Network.
           </Typography>
 
           <Grid container spacing={2}>
@@ -336,7 +388,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
               <TextField
                 label="Full Name"
                 fullWidth
-                placeholder="Eleanor Doe"
+                placeholder="e.g. Sarah Jenkins"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 size="small"
@@ -348,7 +400,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
               <TextField
                 label="Email Address"
                 fullWidth
-                placeholder="eleanor@example.com"
+                placeholder="caretaker@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 size="small"
@@ -364,6 +416,18 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 size="small"
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <TextField
+                label="Caretaker User ID (Optional)"
+                fullWidth
+                placeholder="Leave blank to auto-link by email"
+                value={caretakerIdInput}
+                onChange={(e) => setCaretakerIdInput(e.target.value)}
+                size="small"
+                helperText="If the caretaker has an existing MedTrace Account ID, enter it here."
               />
             </Grid>
 

@@ -64,6 +64,7 @@ export const uploadTestResult = async (
       category: category ? category.trim() : 'General',
       notes: notes ? notes.trim() : '',
       uploadDate: new Date(),
+      status: 'completed',
     };
 
     let newTestResult: any = null;
@@ -93,6 +94,33 @@ export const uploadTestResult = async (
       message: 'Error uploading test result',
       error: error.message,
     });
+  }
+};
+
+// POST /api/test-results/request - Request a lab test without a file
+export const requestTestResult = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { patientId, category, notes, requestedBy } = req.body;
+    const requesterId = requestedBy || req.user?.id;
+    if (!patientId || !category || !requesterId) {
+      res.status(400).json({ success: false, message: 'patientId, category, and requestedBy are required' });
+      return;
+    }
+    const testResultData = {
+      patientId,
+      category: category.trim(),
+      notes: notes ? notes.trim() : '',
+      requestedBy: mongoose.isValidObjectId(requesterId) ? requesterId : undefined,
+      status: 'requested',
+      uploadDate: new Date(),
+    };
+    const testResult = await TestResult.create(testResultData);
+    res.status(201).json({ success: true, message: 'Test requested successfully', testResult });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Error requesting test', error: error.message });
   }
 };
 

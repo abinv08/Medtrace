@@ -234,7 +234,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const googleAuth = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { idToken, role = 'Doctor' } = req.body;
+    const { idToken, role } = req.body;
     if (!idToken) {
       res.status(400).json({ success: false, message: 'Google ID Token is required' });
       return;
@@ -255,15 +255,21 @@ export const googleAuth = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (!user) {
-      // Create new user for Google login
+      // Brand-new account via Google: use provided role hint but NEVER allow Admin
+      // Admin accounts must be created via the explicit registration flow
+      const safeRole: UserRole =
+        role && role !== 'Admin' && ['Doctor', 'Nurse', 'Patient', 'Guardian', 'Caregiver', 'Hospital Administrator'].includes(role)
+          ? (role as UserRole)
+          : 'Patient';
+
       try {
         user = await User.create({
           name: googlePayload.name,
           email: normalizedEmail,
           phone: '+1 800 555 0199',
-          hospitalName: 'General Hospital',
-          department: 'Clinical Intelligence',
-          role: role as UserRole,
+          hospitalName: 'MedTrace General Hospital',
+          department: safeRole === 'Doctor' ? 'General Medicine' : 'General Care',
+          role: safeRole,
           googleId: googlePayload.googleId,
         });
       } catch (dbErr) {
@@ -274,15 +280,16 @@ export const googleAuth = async (req: Request, res: Response): Promise<void> => 
           name: googlePayload.name,
           email: normalizedEmail,
           phone: '+1 800 555 0199',
-          hospitalName: 'General Hospital',
-          department: 'Clinical Intelligence',
-          role: role as UserRole,
+          hospitalName: 'MedTrace General Hospital',
+          department: safeRole === 'Doctor' ? 'General Medicine' : 'General Care',
+          role: safeRole,
           googleId: googlePayload.googleId,
           createdAt: new Date(),
         };
         memoryUsers.set(normalizedEmail, user);
       }
     }
+    // Existing users: role is NEVER modified here — it stays exactly as registered
 
     const userId = user._id ? user._id.toString() : user.id;
     const { accessToken, refreshToken } = generateTokens({
@@ -310,6 +317,7 @@ export const googleAuth = async (req: Request, res: Response): Promise<void> => 
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: 'Google Auth error', error: error.message });
+
   }
 };
 

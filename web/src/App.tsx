@@ -9,6 +9,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { RoleDashboard } from './pages/dashboards/RoleDashboards';
 import { MedicalReportPage } from './pages/MedicalReportPage';
 import { CSIBreathingMonitor } from './pages/CSIBreathingMonitor';
+import PatientDetailPage from './pages/PatientDetailPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
@@ -48,6 +49,14 @@ export const App: React.FC = () => {
               element={
                 <ProtectedRoute>
                   <CSIBreathingMonitor />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/patients/:patientId"
+              element={
+                <ProtectedRoute>
+                  <PatientDetailPage />
                 </ProtectedRoute>
               }
             />

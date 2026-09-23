@@ -37,6 +37,7 @@ exports.registerValidationRules = [
         'Caregiver',
         'Guardian',
         'Hospital Administrator',
+        'Admin',
     ])
         .withMessage('Invalid role specified'),
 ];

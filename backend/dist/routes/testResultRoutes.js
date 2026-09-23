@@ -8,6 +8,7 @@ const router = (0, express_1.Router)();
 router.use(authMiddleware_1.authenticateJWT);
 // Endpoint: POST /api/test-results (upload file + metadata)
 router.post('/', testResultController_1.upload.single('file'), testResultController_1.uploadTestResult);
+router.post('/request', testResultController_1.requestTestResult);
 // Endpoint: GET /api/test-results/file/:id (download/stream the file)
 router.get('/file/:id', testResultController_1.downloadTestResultFile);
 // Endpoint: GET /api/test-results/:patientId (list for a patient)

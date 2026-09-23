@@ -202,7 +202,7 @@ const login = async (req, res) => {
 exports.login = login;
 const googleAuth = async (req, res) => {
     try {
-        const { idToken, role = 'Doctor' } = req.body;
+        const { idToken, role } = req.body;
         if (!idToken) {
             res.status(400).json({ success: false, message: 'Google ID Token is required' });
             return;
@@ -221,15 +221,19 @@ const googleAuth = async (req, res) => {
             user = memoryUsers.get(normalizedEmail) || null;
         }
         if (!user) {
-            // Create new user for Google login
+            // Brand-new account via Google: use provided role hint but NEVER allow Admin
+            // Admin accounts must be created via the explicit registration flow
+            const safeRole = role && role !== 'Admin' && ['Doctor', 'Nurse', 'Patient', 'Guardian', 'Caregiver', 'Hospital Administrator'].includes(role)
+                ? role
+                : 'Patient';
             try {
                 user = await User_1.User.create({
                     name: googlePayload.name,
                     email: normalizedEmail,
                     phone: '+1 800 555 0199',
-                    hospitalName: 'General Hospital',
-                    department: 'Clinical Intelligence',
-                    role: role,
+                    hospitalName: 'MedTrace General Hospital',
+                    department: safeRole === 'Doctor' ? 'General Medicine' : 'General Care',
+                    role: safeRole,
                     googleId: googlePayload.googleId,
                 });
             }
@@ -241,15 +245,16 @@ const googleAuth = async (req, res) => {
                     name: googlePayload.name,
                     email: normalizedEmail,
                     phone: '+1 800 555 0199',
-                    hospitalName: 'General Hospital',
-                    department: 'Clinical Intelligence',
-                    role: role,
+                    hospitalName: 'MedTrace General Hospital',
+                    department: safeRole === 'Doctor' ? 'General Medicine' : 'General Care',
+                    role: safeRole,
                     googleId: googlePayload.googleId,
                     createdAt: new Date(),
                 };
                 memoryUsers.set(normalizedEmail, user);
             }
         }
+        // Existing users: role is NEVER modified here — it stays exactly as registered
         const userId = user._id ? user._id.toString() : user.id;
         const { accessToken, refreshToken } = generateTokens({
             id: userId,

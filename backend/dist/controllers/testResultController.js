@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.downloadTestResultFile = exports.getTestResultsByPatientId = exports.uploadTestResult = exports.upload = void 0;
+exports.downloadTestResultFile = exports.getTestResultsByPatientId = exports.requestTestResult = exports.uploadTestResult = exports.upload = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -57,6 +57,7 @@ const uploadTestResult = async (req, res) => {
             category: category ? category.trim() : 'General',
             notes: notes ? notes.trim() : '',
             uploadDate: new Date(),
+            status: 'completed',
         };
         let newTestResult = null;
         try {
@@ -89,6 +90,31 @@ const uploadTestResult = async (req, res) => {
     }
 };
 exports.uploadTestResult = uploadTestResult;
+// POST /api/test-results/request - Request a lab test without a file
+const requestTestResult = async (req, res) => {
+    try {
+        const { patientId, category, notes, requestedBy } = req.body;
+        const requesterId = requestedBy || req.user?.id;
+        if (!patientId || !category || !requesterId) {
+            res.status(400).json({ success: false, message: 'patientId, category, and requestedBy are required' });
+            return;
+        }
+        const testResultData = {
+            patientId,
+            category: category.trim(),
+            notes: notes ? notes.trim() : '',
+            requestedBy: mongoose_1.default.isValidObjectId(requesterId) ? requesterId : undefined,
+            status: 'requested',
+            uploadDate: new Date(),
+        };
+        const testResult = await TestResult_1.TestResult.create(testResultData);
+        res.status(201).json({ success: true, message: 'Test requested successfully', testResult });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: 'Error requesting test', error: error.message });
+    }
+};
+exports.requestTestResult = requestTestResult;
 // GET /api/test-results/:patientId - List test results for a patient
 const getTestResultsByPatientId = async (req, res) => {
     try {

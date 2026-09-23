@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/medtrace_logo.dart';
+import 'caretaker_dashboard_screen.dart';
+import 'doctor_dashboard_screen.dart';
+import 'patient_dashboard_screen.dart';
 
 /// ---------------------------------------------------------------------
 /// Colors
@@ -94,7 +97,7 @@ class PatientSummary {
   });
 }
 
-final List<PatientSummary> _mockPatients = [
+final List<PatientSummary> _mockPatients = const [
   PatientSummary(
     id: 'p1',
     name: 'Rahul',
@@ -129,10 +132,24 @@ final List<PatientSummary> _mockPatients = [
 class RoleDashboardScreen extends StatefulWidget {
   final String roleName;
 
-  const RoleDashboardScreen({Key? key, required this.roleName}) : super(key: key);
+  const RoleDashboardScreen({super.key, required this.roleName});
 
   @override
   State<RoleDashboardScreen> createState() => _RoleDashboardScreenState();
+}
+
+Widget dashboardForRole(String roleName) {
+  switch (roleName.trim().toLowerCase()) {
+    case 'doctor':
+      return const DoctorDashboardScreen();
+    case 'caretaker':
+    case 'caregiver':
+    case 'guardian':
+      return const CaretakerDashboardScreen();
+    case 'patient':
+    default:
+      return const PatientDashboardScreen();
+  }
 }
 
 class _RoleDashboardScreenState extends State<RoleDashboardScreen> {

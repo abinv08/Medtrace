@@ -6,7 +6,8 @@ export type UserRole =
   | 'Patient'
   | 'Caregiver'
   | 'Guardian'
-  | 'Hospital Administrator';
+  | 'Hospital Administrator'
+  | 'Admin';
 
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
@@ -46,8 +47,9 @@ const UserSchema: Schema = new Schema(
         'Caregiver',
         'Guardian',
         'Hospital Administrator',
+        'Admin',
       ],
-      default: 'Doctor',
+      default: 'Patient',
     },
     googleId: { type: String, default: null },
     refreshToken: { type: String, default: null },

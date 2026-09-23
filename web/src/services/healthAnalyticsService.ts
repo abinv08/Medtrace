@@ -8,6 +8,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
+import api from './api';
 import { createNotification } from './notificationService';
 
 export interface VitalReading {
@@ -54,23 +55,71 @@ export interface MetricBaseline {
 
 const LOCAL_VITALS: Record<string, VitalReading[]> = {};
 
-export const fetchPatientVitals = async (patientId: string): Promise<VitalReading[]> => {
+export const fetchPatientVitals = async (
+  patientId: string,
+  from?: string,
+  to?: string
+): Promise<VitalReading[]> => {
+  if (!patientId) return [];
+
+  // 1. Fetch from backend GET /api/vitals/:patientId with date range
+  try {
+    const params: Record<string, string> = {};
+    if (from) params.from = from;
+    if (to) params.to = to;
+
+    const res = await api.get(`/api/vitals/${encodeURIComponent(patientId)}`, { params });
+    if (res.data?.success && Array.isArray(res.data.vitals)) {
+      const list: VitalReading[] = res.data.vitals.map((v: any) => {
+        const recDate = v.recordedAt ? new Date(v.recordedAt) : new Date();
+        const dateStr = !isNaN(recDate.getTime())
+          ? recDate.toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0];
+        const timeStr = !isNaN(recDate.getTime())
+          ? recDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : undefined;
+
+        return {
+          id: v._id || v.id || `vital-${Date.now()}`,
+          patientId: v.patientId,
+          date: dateStr,
+          time: timeStr,
+          systolicBP: v.bloodPressureSystolic || 120,
+          diastolicBP: v.bloodPressureDiastolic || 80,
+          heartRate: v.heartRate || 72,
+          glucoseFasting: v.glucoseFasting || undefined,
+          glucosePostPrandial: v.glucosePostPrandial || undefined,
+          spO2: v.spo2 || v.spO2 || 98,
+          weightKg: v.weightKg || undefined,
+          bmi: v.bmi || (v.weightKg ? Number((v.weightKg / (1.75 * 1.75)).toFixed(1)) : undefined),
+          cholesterolTotal: v.cholesterolTotal || undefined,
+          source: v.source || 'manual',
+        };
+      });
+
+      list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      return list;
+    }
+  } catch (apiErr) {
+    // fallback to Firestore / local cache below
+  }
+
+  // 2. Secondary fallback to Firestore
   try {
     const q = query(
       collection(db, 'vitals'),
       where('patientId', '==', patientId)
     );
     const snap = await getDocs(q);
-    if (snap.empty) {
-      // Return session-cached vitals if any were added this session
-      return LOCAL_VITALS[patientId] || [];
+    if (!snap.empty) {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as VitalReading));
+      return list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     }
-    const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as VitalReading));
-    LOCAL_VITALS[patientId] = list;
-    return list.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   } catch {
-    return LOCAL_VITALS[patientId] || [];
+    // ignore
   }
+
+  return LOCAL_VITALS[patientId] || [];
 };
 
 export const addVitalReading = async (
@@ -83,15 +132,27 @@ export const addVitalReading = async (
   };
 
   try {
-    await setDoc(doc(db, 'vitals', id), {
-      ...newReading,
-      createdAt: serverTimestamp(),
+    await api.post('/api/vitals', {
+      patientId: reading.patientId,
+      bloodPressureSystolic: reading.systolicBP,
+      bloodPressureDiastolic: reading.diastolicBP,
+      heartRate: reading.heartRate,
+      spo2: reading.spO2,
+      source: reading.source || 'manual',
+      recordedAt: reading.date ? new Date(reading.date).toISOString() : new Date().toISOString(),
     });
   } catch {
-    if (!LOCAL_VITALS[reading.patientId]) {
-      LOCAL_VITALS[reading.patientId] = [];
+    try {
+      await setDoc(doc(db, 'vitals', id), {
+        ...newReading,
+        createdAt: serverTimestamp(),
+      });
+    } catch {
+      if (!LOCAL_VITALS[reading.patientId]) {
+        LOCAL_VITALS[reading.patientId] = [];
+      }
+      LOCAL_VITALS[reading.patientId].push(newReading);
     }
-    LOCAL_VITALS[reading.patientId].push(newReading);
   }
 
   // Calculate anomalies against historical baseline
@@ -112,6 +173,7 @@ export const addVitalReading = async (
 
   return { reading: newReading, anomalies };
 };
+
 
 // ─── Anomaly Detection Engine ────────────────────────────────────────────────
 export const detectAnomalies = (
