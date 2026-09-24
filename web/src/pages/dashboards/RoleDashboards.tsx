@@ -5,6 +5,8 @@ import { PatientDashboard } from './PatientDashboard';
 import { DoctorDashboard } from './DoctorDashboard';
 import { AdminDashboard } from './AdminDashboard';
 import { CaretakerDashboard } from './CaretakerDashboard';
+import { HeadNurseDashboard } from './HeadNurseDashboard';
+import { NurseDashboard } from './NurseDashboard';
 import { checkIsAssignedCaretaker } from '../../services/caretakerService';
 
 // ─── Role → Dashboard mapping ─────────────────────────────────────────────────
@@ -25,18 +27,27 @@ export const RoleDashboard: React.FC = () => {
 
   const role = (user?.role || roleName || '').toLowerCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
 
+  if (user?.isHeadNurse && String(user.status || '').toLowerCase() === 'approved') {
+    return <HeadNurseDashboard />;
+  }
+
 
   if (role === 'caretaker' || role === 'caregiver' || isCaretaker) {
     return <CaretakerDashboard />;
   }
 
   switch (role) {
+    case 'head nurse':
+      return <HeadNurseDashboard />;
+
+    case 'nurse':
+      return <NurseDashboard />;
+
     case 'patient':
     case 'guardian':
       return <PatientDashboard />;
 
     case 'doctor':
-    case 'nurse':
       return <DoctorDashboard />;
 
     case 'admin':

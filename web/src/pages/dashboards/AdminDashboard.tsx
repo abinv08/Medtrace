@@ -4,7 +4,7 @@ import {
   CircularProgress, Alert, Tabs, Tab, Divider, Dialog,
   DialogTitle, DialogContent, DialogActions, TextField,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  IconButton, Tooltip, InputAdornment, MenuItem, Select, FormControl,
+  IconButton, Tooltip, InputAdornment, MenuItem, Select, FormControl, InputLabel,
 } from '@mui/material';
 import {
   CheckCircle, Cancel, Person, MedicalServices, HowToReg,
@@ -21,6 +21,7 @@ import {
   fetchAllDoctors,
   approveDoctor,
   rejectDoctor,
+  promoteToHeadNurse,
   DoctorProfile,
   fetchAllPatients,
   PatientSearchResult,
@@ -61,6 +62,16 @@ export interface AdminStats {
     activePrescriptions: number;
     uploadedReports: number;
   };
+}
+
+interface NurseTask {
+  _id: string;
+  patientId?: { name?: string; userId?: { name?: string; email?: string } } | string;
+  assignedNurse?: { name?: string; email?: string } | string;
+  assignedBy?: { name?: string; email?: string } | string;
+  taskDescription: string;
+  dueAt?: string;
+  status: 'pending_approval' | 'approved' | 'rejected' | 'completed';
 }
 
 const C = {
@@ -106,11 +117,24 @@ export const AdminDashboard: React.FC = () => {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [pending, setPending] = useState<DoctorProfile[]>([]);
   const [allDoctors, setAllDoctors] = useState<DoctorProfile[]>([]);
+  const [allNurses, setAllNurses] = useState<DoctorProfile[]>([]);
   const [allPatients, setAllPatients] = useState<PatientSearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingTasks, setPendingTasks] = useState<NurseTask[]>([]);
+  const [taskRejectDialog, setTaskRejectDialog] = useState<{ open: boolean; taskId: string; description: string }>({
+    open: false,
+    taskId: '',
+    description: '',
+  });
+  const [taskRejectReason, setTaskRejectReason] = useState('');
+  const [assignmentNurseId, setAssignmentNurseId] = useState('');
+  const [assignmentPatientId, setAssignmentPatientId] = useState('');
+  const [assignmentWard, setAssignmentWard] = useState('');
+  const [assignmentShift, setAssignmentShift] = useState('');
+  const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
 
   // Search and role filters for All Users tab
   const [userSearch, setUserSearch] = useState('');
@@ -170,12 +194,14 @@ export const AdminDashboard: React.FC = () => {
       }
 
       if (docProfiles.status === 'fulfilled') {
-        setAllDoctors(docProfiles.value);
+        setAllDoctors(docProfiles.value.filter((profile) => profile.role?.toLowerCase() === 'doctor'));
+        setAllNurses(docProfiles.value.filter((profile) => ['nurse', 'head nurse'].includes(profile.role?.toLowerCase() || '')));
       }
 
       if (patientProfiles.status === 'fulfilled') {
         setAllPatients(patientProfiles.value);
       }
+
     } catch (e: any) {
       console.error('Error fetching admin data:', e);
       setActionError(e.message || 'Error loading administrator resources');
@@ -250,6 +276,21 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handlePromoteToHeadNurse = async (nurse: DoctorProfile) => {
+    if (!user?.id || nurse.status !== 'approved' || nurse.isHeadNurse) return;
+    setProcessing(nurse.id);
+    setActionError(null);
+    try {
+      await promoteToHeadNurse(nurse.id, user.id);
+      setActionFeedback(`${nurse.name} is now a Head Nurse and can assign patients and create tasks.`);
+      await loadData();
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to promote nurse to Head Nurse. Check Firestore permissions.');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
   const openReject = (doctor: DoctorProfile) => {
     setRejectDialog({ open: true, doctorId: doctor.id, doctorName: doctor.name });
     setRejectReason('');
@@ -264,6 +305,65 @@ export const AdminDashboard: React.FC = () => {
       await loadData();
     } finally {
       setProcessing(null);
+    }
+  };
+
+  const taskPersonName = (value: NurseTask['assignedNurse'] | NurseTask['assignedBy']) => {
+    if (!value) return '—';
+    if (typeof value === 'string') return value;
+    return value.name || value.email || '—';
+  };
+
+  const taskPatientName = (value: NurseTask['patientId']) => {
+    if (!value) return '—';
+    if (typeof value === 'string') return value;
+    return value.name || value.userId?.name || value.userId?.email || 'Patient';
+  };
+
+  const handleTaskApproval = async (taskId: string, action: 'approve' | 'reject', approvalNotes?: string) => {
+    setProcessing(taskId);
+    setActionError(null);
+    try {
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+      await api.put(`/api/nurse-tasks/${taskId}/${action}`, action === 'reject' ? { approvalNotes } : {}, { headers: authHeaders });
+      setActionFeedback(`Task ${action === 'approve' ? 'approved' : 'rejected'} successfully.`);
+      setPendingTasks((previous) => previous.filter((task) => task._id !== taskId));
+      setTaskRejectDialog({ open: false, taskId: '', description: '' });
+      setTaskRejectReason('');
+    } catch (err: any) {
+      setActionError(err.response?.data?.message || err.message || `Failed to ${action} task`);
+    } finally {
+      setProcessing(null);
+    }
+  };
+
+  const handleTaskReject = async () => {
+    if (!taskRejectDialog.taskId || !taskRejectReason.trim()) return;
+    await handleTaskApproval(taskRejectDialog.taskId, 'reject', taskRejectReason.trim());
+  };
+
+  const handleAssignNurse = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!assignmentNurseId || !assignmentPatientId) return;
+    setAssignmentSubmitting(true);
+    setActionError(null);
+    try {
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+      await api.post('/api/nurse-assignments', {
+        nurseId: assignmentNurseId,
+        patientId: assignmentPatientId,
+        ...(assignmentWard.trim() ? { ward: assignmentWard.trim() } : {}),
+        ...(assignmentShift ? { shift: assignmentShift } : {}),
+      }, { headers: authHeaders });
+      setAssignmentNurseId('');
+      setAssignmentPatientId('');
+      setAssignmentWard('');
+      setAssignmentShift('');
+      setActionFeedback('Nurse assigned to patient successfully.');
+    } catch (err: any) {
+      setActionError(err.response?.data?.message || err.message || 'Failed to assign nurse');
+    } finally {
+      setAssignmentSubmitting(false);
     }
   };
 
@@ -414,6 +514,11 @@ export const AdminDashboard: React.FC = () => {
                 color: C.teal,
               },
               {
+                label: 'Nurses & Head Nurses',
+                value: stats?.users?.nurses ?? allNurses.length,
+                color: C.amber,
+              },
+              {
                 label: 'Monitored Patients',
                 value: stats?.users?.patients ?? allUsers.filter((u) => u.role?.toLowerCase() === 'patient').length,
                 color: C.primary,
@@ -483,6 +588,7 @@ export const AdminDashboard: React.FC = () => {
             <Tab label={`All Users (${allUsers.length})`} />
             <Tab label={`Pending Approvals ${pending.length > 0 ? `(${pending.length})` : ''}`} />
             <Tab label={`All Doctors (${allDoctors.length})`} />
+            <Tab label={`Nurses (${allNurses.length})`} />
             <Tab label={`All Patients (${allPatients.length})`} />
           </Tabs>
         </Box>
@@ -825,6 +931,21 @@ export const AdminDashboard: React.FC = () => {
                             ) : (
                               <Chip label="Verified" size="small" sx={{ backgroundColor: `${C.green}12`, color: C.green, fontWeight: 700, fontSize: '0.68rem', height: 22 }} />
                             )}
+                            {d.role?.toLowerCase() === 'nurse' && d.status === 'approved' && (
+                              d.isHeadNurse ? (
+                                <Chip label="Head Nurse" size="small" sx={{ backgroundColor: `${C.teal}12`, color: C.teal, fontWeight: 700, fontSize: '0.68rem', height: 22 }} />
+                              ) : (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() => handlePromoteToHeadNurse(d)}
+                                  disabled={processing === d.id}
+                                  sx={{ borderColor: C.teal, color: C.teal, '&:hover': { backgroundColor: `${C.teal}08` }, fontSize: '0.72rem', fontWeight: 700, borderRadius: '6px', py: 0.25, px: 1 }}
+                                >
+                                  Make Head Nurse
+                                </Button>
+                              )
+                            )}
                             <Button
                               size="small"
                               variant="outlined"
@@ -853,7 +974,7 @@ export const AdminDashboard: React.FC = () => {
             )}
 
             {/* ── Tab 3: All Patients ─────────────────────────────────────────── */}
-            {activeTab === 3 && (
+            {activeTab === 4 && (
               <TableContainer component={Paper} elevation={0} sx={{ borderRadius: '14px', border: `1px solid ${C.border}` }}>
                 <Table size="small">
                   <TableHead>
@@ -911,9 +1032,168 @@ export const AdminDashboard: React.FC = () => {
                 </Table>
               </TableContainer>
             )}
+
+            {/* ── Tab 3: Nurses & Head Nurses ─────────────────────────────────── */}
+            {activeTab === 3 && (
+              <TableContainer component={Paper} elevation={0} sx={{ borderRadius: '14px', border: `1px solid ${C.border}` }}>
+                <Table size="small">
+                  <TableHead><TableRow sx={{ '& th': { backgroundColor: '#F8FAFC', fontWeight: 700, color: C.muted, fontSize: '0.75rem', py: 1.5 } }}><TableCell>Name</TableCell><TableCell>Email</TableCell><TableCell>Department</TableCell><TableCell>Status</TableCell><TableCell>Role</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead>
+                  <TableBody>
+                    {allNurses.map((nurse) => (
+                      <TableRow key={nurse.id} hover sx={{ '& td': { py: 1.5, fontSize: '0.82rem' } }}>
+                        <TableCell sx={{ color: C.slate, fontWeight: 700 }}>{nurse.name}</TableCell>
+                        <TableCell sx={{ color: C.muted }}>{nurse.email}</TableCell>
+                        <TableCell sx={{ color: C.muted }}>{(nurse as DoctorProfile & { department?: string }).department || '—'}</TableCell>
+                        <TableCell>{statusChip(nurse.status || 'pending')}</TableCell>
+                        <TableCell>{nurse.isHeadNurse ? <Chip label="Head Nurse" size="small" sx={{ backgroundColor: `${C.teal}12`, color: C.teal, fontWeight: 700 }} /> : <Chip label="Nurse" size="small" />}</TableCell>
+                        <TableCell align="right">
+                          {nurse.status === 'approved' && !nurse.isHeadNurse && <Button size="small" variant="outlined" onClick={() => handlePromoteToHeadNurse(nurse)} disabled={processing === nurse.id} sx={{ borderColor: C.teal, color: C.teal, borderRadius: '6px', fontWeight: 700 }}>Make Head Nurse</Button>}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {allNurses.length === 0 && <TableRow><TableCell colSpan={6} sx={{ textAlign: 'center', py: 3, color: C.muted }}>No nurses registered yet.</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+
+            {/* ── Tab 4: Nurse Task Approvals & Assignments ─────────────────── */}
+            {false && activeTab === 4 && (
+              <Box>
+                <Paper
+                  component="form"
+                  onSubmit={handleAssignNurse}
+                  elevation={0}
+                  sx={{ p: 2.5, borderRadius: '14px', border: `1px solid ${C.border}`, mb: 3 }}
+                >
+                  <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1} mb={2}>
+                    <Box>
+                      <Typography variant="h6" sx={{ color: C.slate, fontWeight: 800 }}>Assign Nurse to Patient</Typography>
+                      <Typography variant="body2" sx={{ color: C.muted }}>Create a nurse coverage assignment directly from the admin console.</Typography>
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: '1.1fr 1.1fr 0.8fr 0.8fr auto' }, gap: 1.5, alignItems: 'center' }}>
+                    <FormControl size="small" fullWidth required>
+                      <Select
+                        displayEmpty
+                        value={assignmentNurseId}
+                        onChange={(event) => setAssignmentNurseId(event.target.value)}
+                        renderValue={(value) => value ? allUsers.find((nurse) => (nurse._id || nurse.id) === value)?.name || 'Selected nurse' : 'Select nurse'}
+                      >
+                        <MenuItem value="" disabled>Select nurse</MenuItem>
+                        {allUsers.filter((candidate) => candidate.role?.toLowerCase() === 'nurse').map((nurse) => (
+                          <MenuItem key={nurse._id || nurse.id} value={nurse._id || nurse.id}>{nurse.name} · {nurse.email}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <FormControl size="small" fullWidth required>
+                      <Select
+                        displayEmpty
+                        value={assignmentPatientId}
+                        onChange={(event) => setAssignmentPatientId(event.target.value)}
+                        renderValue={(value) => value ? allPatients.find((patient) => patient.patientId === value)?.name || 'Selected patient' : 'Select patient'}
+                      >
+                        <MenuItem value="" disabled>Select patient</MenuItem>
+                        {allPatients.map((patient) => (
+                          <MenuItem key={patient.patientId || patient.uid} value={patient.patientId}>{patient.name} · {patient.patientId}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <TextField size="small" label="Ward (optional)" value={assignmentWard} onChange={(event) => setAssignmentWard(event.target.value)} />
+                    <FormControl size="small" fullWidth>
+                      <InputLabel>Shift</InputLabel>
+                      <Select label="Shift" value={assignmentShift} onChange={(event) => setAssignmentShift(event.target.value)}>
+                        <MenuItem value=""><em>None</em></MenuItem>
+                        <MenuItem value="day">Day</MenuItem>
+                        <MenuItem value="night">Night</MenuItem>
+                        <MenuItem value="other">Other</MenuItem>
+                      </Select>
+                    </FormControl>
+                    <Button type="submit" variant="contained" disabled={assignmentSubmitting || !assignmentNurseId || !assignmentPatientId} sx={{ backgroundColor: C.primary, fontWeight: 700, borderRadius: '8px', minHeight: 40 }}>
+                      {assignmentSubmitting ? <CircularProgress size={18} color="inherit" /> : 'Assign'}
+                    </Button>
+                  </Box>
+                </Paper>
+
+                <TableContainer component={Paper} elevation={0} sx={{ borderRadius: '14px', border: `1px solid ${C.border}` }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow sx={{ '& th': { backgroundColor: '#F8FAFC', fontWeight: 700, color: C.muted, fontSize: '0.75rem', py: 1.5 } }}>
+                        <TableCell>Patient</TableCell>
+                        <TableCell>Assigned Nurse</TableCell>
+                        <TableCell>Task</TableCell>
+                        <TableCell>Due Date</TableCell>
+                        <TableCell>Created By</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell align="right">Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {pendingTasks.map((task) => (
+                        <TableRow key={task._id} hover sx={{ '& td': { py: 1.5, fontSize: '0.82rem' } }}>
+                          <TableCell sx={{ color: C.slate, fontWeight: 700 }}>{taskPatientName(task.patientId)}</TableCell>
+                          <TableCell sx={{ color: C.slate }}>{taskPersonName(task.assignedNurse)}</TableCell>
+                          <TableCell sx={{ color: C.slate, maxWidth: 260 }}>{task.taskDescription}</TableCell>
+                          <TableCell sx={{ color: C.muted }}>{fmtDate(task.dueAt)}</TableCell>
+                          <TableCell sx={{ color: C.muted }}>{taskPersonName(task.assignedBy)}</TableCell>
+                          <TableCell>
+                            <Chip label="PENDING APPROVAL" size="small" sx={{ backgroundColor: `${C.amber}12`, color: C.amber, fontWeight: 800, fontSize: '0.65rem', height: 22 }} />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Box display="flex" gap={1} justifyContent="flex-end">
+                              <Button size="small" variant="contained" startIcon={<CheckCircle />} onClick={() => handleTaskApproval(task._id, 'approve')} disabled={processing === task._id} sx={{ backgroundColor: C.green, '&:hover': { backgroundColor: '#047857' }, fontSize: '0.72rem', fontWeight: 700, borderRadius: '6px', py: 0.25, px: 1 }}>
+                                Approve
+                              </Button>
+                              <Button size="small" variant="outlined" startIcon={<Cancel />} onClick={() => { setTaskRejectDialog({ open: true, taskId: task._id, description: task.taskDescription }); setTaskRejectReason(''); }} disabled={processing === task._id} sx={{ borderColor: C.red, color: C.red, fontSize: '0.72rem', fontWeight: 700, borderRadius: '6px', py: 0.25, px: 1 }}>
+                                Reject
+                              </Button>
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {pendingTasks.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: C.muted }}>No nurse tasks are awaiting approval.</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            )}
           </>
         )}
       </Container>
+
+      <Dialog
+        open={taskRejectDialog.open}
+        onClose={() => setTaskRejectDialog({ open: false, taskId: '', description: '' })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 800 }}>Reject Nurse Task</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: C.muted, mb: 2 }}>
+            Add a reason for rejecting <strong>{taskRejectDialog.description}</strong>.
+          </Typography>
+          <TextField
+            label="Rejection reason"
+            fullWidth
+            multiline
+            rows={3}
+            value={taskRejectReason}
+            onChange={(event) => setTaskRejectReason(event.target.value)}
+            size="small"
+            autoFocus
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={() => setTaskRejectDialog({ open: false, taskId: '', description: '' })}>Cancel</Button>
+          <Button variant="contained" onClick={handleTaskReject} disabled={!taskRejectReason.trim() || processing !== null} sx={{ backgroundColor: C.red, '&:hover': { backgroundColor: '#B91C1C' }, fontWeight: 700 }}>
+            Confirm Rejection
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Reject Doctor Dialog ────────────────────────────────────────────── */}
       <Dialog

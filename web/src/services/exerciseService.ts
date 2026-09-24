@@ -260,7 +260,7 @@ Output ONLY valid JSON with this structure:
       const parsed = JSON.parse(jsonMatch[0]);
       const routines: ExerciseItem[] = parsed.routines || [];
 
-      // Format exercises for MongoDB backend storage
+      // Format exercises for Firestore storage.
       const exercisesForBackend: ExerciseItem[] = routines.map((r: any) => ({
         name: r.name,
         notes: [

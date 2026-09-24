@@ -13,6 +13,8 @@ import adminRoutes from './routes/adminRoutes';
 import exercisePlanRoutes from './routes/exercisePlanRoutes';
 import clinicalNoteRoutes from './routes/clinicalNoteRoutes';
 import messageRoutes from './routes/messageRoutes';
+import nurseAssignmentRoutes from './routes/nurseAssignmentRoutes';
+import nurseTaskRoutes from './routes/nurseTaskRoutes';
 
 dotenv.config();
 
@@ -60,6 +62,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/exercise-plans', exercisePlanRoutes);
 app.use('/api/clinical-notes', clinicalNoteRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/nurse-assignments', nurseAssignmentRoutes);
+app.use('/api/nurse-tasks', nurseTaskRoutes);
 
 // System Health Endpoint
 app.get('/api/health', (req: Request, res: Response) => {

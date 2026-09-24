@@ -18,6 +18,8 @@ const adminRoutes_1 = __importDefault(require("./routes/adminRoutes"));
 const exercisePlanRoutes_1 = __importDefault(require("./routes/exercisePlanRoutes"));
 const clinicalNoteRoutes_1 = __importDefault(require("./routes/clinicalNoteRoutes"));
 const messageRoutes_1 = __importDefault(require("./routes/messageRoutes"));
+const nurseAssignmentRoutes_1 = __importDefault(require("./routes/nurseAssignmentRoutes"));
+const nurseTaskRoutes_1 = __importDefault(require("./routes/nurseTaskRoutes"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
@@ -55,6 +57,8 @@ app.use('/api/admin', adminRoutes_1.default);
 app.use('/api/exercise-plans', exercisePlanRoutes_1.default);
 app.use('/api/clinical-notes', clinicalNoteRoutes_1.default);
 app.use('/api/messages', messageRoutes_1.default);
+app.use('/api/nurse-assignments', nurseAssignmentRoutes_1.default);
+app.use('/api/nurse-tasks', nurseTaskRoutes_1.default);
 // System Health Endpoint
 app.get('/api/health', (req, res) => {
     res.json({

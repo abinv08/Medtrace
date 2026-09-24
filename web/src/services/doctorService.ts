@@ -28,6 +28,7 @@ export interface DoctorProfile extends UserProfile {
   approvedBy?: string;
   approvedAt?: string;
   rejectedReason?: string;
+  isHeadNurse?: boolean;
 }
 
 export interface PatientSearchResult {
@@ -95,7 +96,7 @@ export const fetchPendingDoctors = async (): Promise<DoctorProfile[]> => {
       .map((d) => ({ id: d.id, ...d.data() } as DoctorProfile))
       .filter((d) => {
         const role = (d.role || '').toLowerCase();
-        return role === 'doctor' || role === 'nurse';
+        return role === 'doctor' || role === 'nurse' || role === 'head nurse';
       });
 
     return list.sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
@@ -108,7 +109,7 @@ export const fetchPendingDoctors = async (): Promise<DoctorProfile[]> => {
         .filter((d) => {
           const role = (d.role || '').toLowerCase();
           const status = (d.status || '').toLowerCase();
-          const isMedicalRole = role === 'doctor' || role === 'nurse';
+          const isMedicalRole = role === 'doctor' || role === 'nurse' || role === 'head nurse';
           return isMedicalRole && (status === 'pending' || !d.status);
         });
 
@@ -128,7 +129,7 @@ export const fetchAllDoctors = async (statusFilter?: string): Promise<DoctorProf
       .map((d) => ({ id: d.id, ...d.data() } as DoctorProfile))
       .filter((d) => {
         const role = (d.role || '').toLowerCase();
-        return role === 'doctor' || role === 'nurse';
+        return role === 'doctor' || role === 'nurse' || role === 'head nurse';
       });
 
     if (statusFilter) {
@@ -159,6 +160,17 @@ export const rejectDoctor = async (doctorUid: string, adminId: string, reason: s
     status: 'rejected',
     approvedBy: adminId,
     rejectedReason: reason,
+    updatedAt: serverTimestamp(),
+  });
+};
+
+// ─── Promote an approved nurse to Head Nurse ─────────────────────────────────
+export const promoteToHeadNurse = async (nurseUid: string, adminId: string): Promise<void> => {
+  await updateDoc(doc(db, 'users', nurseUid), {
+    role: 'Head Nurse',
+    isHeadNurse: true,
+    headNurseApprovedBy: adminId,
+    headNurseApprovedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
 };

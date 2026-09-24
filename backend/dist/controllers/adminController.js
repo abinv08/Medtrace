@@ -88,7 +88,7 @@ const getAdminStats = async (req, res) => {
         const [totalUsers, totalDoctors, totalNurses, totalCaregivers, totalPatientProfiles, totalPatientUsers, totalAppointments, appointmentsThisWeek, pendingAppointments, completedAppointments, totalVitals, activeMedications, totalTestResults,] = await Promise.all([
             User_1.User.countDocuments().catch(() => 0),
             User_1.User.countDocuments({ role: 'Doctor' }).catch(() => 0),
-            User_1.User.countDocuments({ role: 'Nurse' }).catch(() => 0),
+            User_1.User.countDocuments({ role: { $in: ['Nurse', 'Head Nurse'] } }).catch(() => 0),
             User_1.User.countDocuments({ role: { $in: ['Caregiver', 'Guardian'] } }).catch(() => 0),
             Patient_1.Patient.countDocuments().catch(() => 0),
             User_1.User.countDocuments({ role: 'Patient' }).catch(() => 0),

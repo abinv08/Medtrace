@@ -33,37 +33,38 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.User = void 0;
+exports.NurseAssignment = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
-const UserSchema = new mongoose_1.Schema({
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    phone: { type: String, required: true, trim: true },
-    hospitalName: { type: String, required: true, trim: true },
-    department: { type: String, required: true, trim: true },
-    professionalId: { type: String, trim: true, default: '' },
-    password: { type: String, required: false },
-    role: {
-        type: String,
+const NurseAssignmentSchema = new mongoose_1.Schema({
+    nurseId: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
         required: true,
-        enum: [
-            'Doctor',
-            'Nurse',
-            'Head Nurse',
-            'Patient',
-            'Caregiver',
-            'Guardian',
-            'Hospital Administrator',
-            'Admin',
-        ],
-        default: 'Patient',
     },
-    googleId: { type: String, default: null },
-    refreshToken: { type: String, default: null },
-    resetPasswordToken: { type: String, default: null },
-    resetPasswordExpires: { type: Date, default: null },
-    isActive: { type: Boolean, default: true },
+    patientId: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'Patient',
+        required: true,
+    },
+    assignedBy: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+    },
+    ward: {
+        type: String,
+    },
+    shift: {
+        type: String,
+        enum: ['day', 'night', 'other'],
+    },
+    status: {
+        type: String,
+        enum: ['active', 'revoked'],
+        default: 'active',
+    },
 }, {
     timestamps: true,
 });
-exports.User = mongoose_1.default.model('User', UserSchema);
+NurseAssignmentSchema.index({ nurseId: 1, patientId: 1 });
+exports.NurseAssignment = mongoose_1.default.model('NurseAssignment', NurseAssignmentSchema);

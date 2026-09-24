@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const nurseAssignmentController_1 = require("../controllers/nurseAssignmentController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
+const router = (0, express_1.Router)();
+router.use(authMiddleware_1.authenticateJWT);
+router.get('/head-nurse/roster', (0, authMiddleware_1.requireRole)('Head Nurse'), nurseAssignmentController_1.getHeadNurseRoster);
+router.post('/', (0, authMiddleware_1.requireRole)('Head Nurse', 'Hospital Administrator', 'Admin'), nurseAssignmentController_1.assignNurse);
+router.put('/:id/revoke', (0, authMiddleware_1.requireRole)('Head Nurse', 'Hospital Administrator', 'Admin'), nurseAssignmentController_1.revokeNurseAssignment);
+router.get('/:nurseId/patients', nurseAssignmentController_1.getAssignedPatients);
+exports.default = router;

@@ -33,37 +33,47 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.User = void 0;
+exports.NurseTask = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
-const UserSchema = new mongoose_1.Schema({
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    phone: { type: String, required: true, trim: true },
-    hospitalName: { type: String, required: true, trim: true },
-    department: { type: String, required: true, trim: true },
-    professionalId: { type: String, trim: true, default: '' },
-    password: { type: String, required: false },
-    role: {
+const NurseTaskSchema = new mongoose_1.Schema({
+    patientId: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'Patient',
+        required: true,
+    },
+    assignedNurse: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+    },
+    assignedBy: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true,
+    },
+    taskDescription: {
         type: String,
         required: true,
-        enum: [
-            'Doctor',
-            'Nurse',
-            'Head Nurse',
-            'Patient',
-            'Caregiver',
-            'Guardian',
-            'Hospital Administrator',
-            'Admin',
-        ],
-        default: 'Patient',
+        trim: true,
     },
-    googleId: { type: String, default: null },
-    refreshToken: { type: String, default: null },
-    resetPasswordToken: { type: String, default: null },
-    resetPasswordExpires: { type: Date, default: null },
-    isActive: { type: Boolean, default: true },
+    dueAt: {
+        type: Date,
+    },
+    status: {
+        type: String,
+        enum: ['pending_approval', 'approved', 'rejected', 'completed'],
+        default: 'pending_approval',
+    },
+    approvedBy: {
+        type: mongoose_1.Schema.Types.ObjectId,
+        ref: 'User',
+    },
+    approvalNotes: {
+        type: String,
+        trim: true,
+    },
 }, {
     timestamps: true,
 });
-exports.User = mongoose_1.default.model('User', UserSchema);
+NurseTaskSchema.index({ assignedNurse: 1, status: 1 });
+exports.NurseTask = mongoose_1.default.model('NurseTask', NurseTaskSchema);

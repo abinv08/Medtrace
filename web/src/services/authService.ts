@@ -33,7 +33,7 @@ export interface UserProfile {
   email: string;
   phone: string;
   hospitalName: string;
-  role: 'Patient' | 'Guardian' | 'Doctor' | 'Nurse' | 'Hospital Administrator' | 'Admin' | 'Caretaker' | string;
+  role: 'Patient' | 'Guardian' | 'Doctor' | 'Nurse' | 'Head Nurse' | 'Hospital Administrator' | 'Admin' | 'Caretaker' | string;
   patientId?: string;           // MT-2026-000001 (patients only)
   dateOfBirth?: string;
   gender?: string;
@@ -50,6 +50,7 @@ export interface UserProfile {
   yearsExperience?: number;
   qualifications?: string;
   status?: 'pending' | 'approved' | 'rejected';  // doctors need admin approval
+  isHeadNurse?: boolean;
   approvedAt?: unknown;
   approvedBy?: string;
   createdAt?: string;
@@ -290,7 +291,7 @@ export const authService = {
   login: async (payload: LoginPayload): Promise<AuthResponse> => {
     const normalizedEmail = payload.email.toLowerCase().trim();
     try {
-      // Do not let a token from the removed MongoDB login flow survive into this session.
+      // Do not let a stale token from an older login flow survive into this session.
       localStorage.removeItem('medtrace_access_token');
       localStorage.removeItem('token');
       await setPersistence(
@@ -382,7 +383,7 @@ export const authService = {
 
       // 3. Authoritative role: FIRESTORE > backend DB > default Patient
       //    Firestore is the source of truth because that's where registration writes the role.
-      //    Backend MongoDB may not have these users or may have a stale/default role.
+      //    The Firestore profile is the source of truth for the role.
       const isRegistration = Boolean(registrationDetails);
       const effectiveRole: string =
         existingFirestoreData?.role || registrationDetails?.role || _role || backendUser?.role || 'Patient';

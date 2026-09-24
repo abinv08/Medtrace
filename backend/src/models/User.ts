@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 export type UserRole =
   | 'Doctor'
   | 'Nurse'
+  | 'Head Nurse'
   | 'Patient'
   | 'Caregiver'
   | 'Guardian'
@@ -43,6 +44,7 @@ const UserSchema: Schema = new Schema(
       enum: [
         'Doctor',
         'Nurse',
+        'Head Nurse',
         'Patient',
         'Caregiver',
         'Guardian',
