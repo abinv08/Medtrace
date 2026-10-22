@@ -4,6 +4,7 @@ import {
   getPatients,
   createPatient,
   updatePatient,
+  updatePatientStatus,
 } from '../controllers/patientController';
 import { authenticateJWT } from '../middleware/authMiddleware';
 
@@ -14,6 +15,9 @@ router.use(authenticateJWT);
 
 // Endpoint: GET /api/patients (list, filterable by ?doctorId=... or ?caretakerId=...)
 router.get('/', getPatients);
+
+// Endpoint: PUT /api/patients/:id/status (active on arrival, inactive on discharge)
+router.put('/:id/status', updatePatientStatus);
 
 // Endpoint: GET /api/patients/:id (get one by patient ID or user ID)
 router.get('/:id', getPatientById);

@@ -428,6 +428,16 @@ export const PatientDashboard: React.FC = () => {
                     <ContentCopy sx={{ fontSize: 16 }} />
                   </IconButton>
                 </Tooltip>
+                <Chip
+                  label={user?.careStatus === 'active' ? 'ACTIVE · IN HOSPITAL' : 'AT HOME · DISCHARGED'}
+                  size="small"
+                  sx={{
+                    backgroundColor: user?.careStatus === 'active' ? 'rgba(220,38,38,0.2)' : 'rgba(255,255,255,0.18)',
+                    color: '#fff',
+                    fontWeight: 800,
+                    border: '1px solid rgba(255,255,255,0.3)',
+                  }}
+                />
                 <Tooltip title="Refresh Clinical Data">
                   <IconButton
                     size="small"
@@ -712,6 +722,7 @@ export const PatientDashboard: React.FC = () => {
                 <LongitudinalTrends
                   patientId={patientId}
                   vitals={vitals}
+                  allowManualEntry={user?.careStatus !== 'active'}
                   onVitalsUpdated={loadData}
                   onAnomalyDetected={(newAnoms) => setAnomalies(newAnoms)}
                 />
@@ -733,6 +744,7 @@ export const PatientDashboard: React.FC = () => {
                 <LongitudinalTrends
                   patientId={patientId}
                   vitals={vitals}
+                  allowManualEntry={user?.careStatus !== 'active'}
                   onVitalsUpdated={loadData}
                   onAnomalyDetected={(newAnoms) => setAnomalies(newAnoms)}
                 />

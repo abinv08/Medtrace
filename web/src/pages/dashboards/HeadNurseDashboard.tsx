@@ -30,6 +30,8 @@ import { useNavigate } from 'react-router-dom';
 import { MedTraceLogo } from '../../components/Logo';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
+import { fetchAllDoctors, fetchAllPatients } from '../../services/doctorService';
+import { createNurseDuty, dutyWindow, getNurseDuties, NurseDuty, subscribeToNurseDuties } from '../../services/nurseDutyService';
 
 const colors = {
   navy: '#1E293B',
@@ -50,6 +52,7 @@ type Patient = {
   userId?: { name?: string; email?: string } | string;
   assignments?: { nurseId: string }[];
   latestVitals?: { heartRate?: number; spo2?: number; temperature?: number; bloodPressureSystolic?: number; bloodPressureDiastolic?: number; recordedAt?: string } | null;
+  patientId?: string;
 };
 
 type Nurse = {
@@ -95,6 +98,7 @@ export const HeadNurseDashboard: React.FC = () => {
   const [nurses, setNurses] = useState<NurseWithPatients[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [tasks, setTasks] = useState<NurseTask[]>([]);
+  const [duties, setDuties] = useState<NurseDuty[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -107,6 +111,7 @@ export const HeadNurseDashboard: React.FC = () => {
   const [vitals, setVitals] = useState<Record<string, Record<string, string>>>({});
   const [taskDescription, setTaskDescription] = useState('');
   const [dueAt, setDueAt] = useState('');
+  const [dutyForm, setDutyForm] = useState<{ nurseId: string; wardName: string; dutyDate: string; shift: NonNullable<NurseDuty['shift']>; startTime: string; endTime: string; notes: string }>({ nurseId: '', wardName: '', dutyDate: '', shift: 'morning', startTime: '07:00', endTime: '15:00', notes: '' });
 
   const authHeaders = useCallback(async () => {
     let activeToken = token;
@@ -119,12 +124,39 @@ export const HeadNurseDashboard: React.FC = () => {
     setError('');
     try {
       const headers = await authHeaders();
-      const [rosterResponse, tasksResponse] = await Promise.all([
-        api.get('/api/nurse-assignments/head-nurse/roster', { headers }),
+      const [nurseProfiles, patientProfiles, assignmentsResponse, tasksResponse, dutyResults] = await Promise.all([
+        fetchAllDoctors(),
+        fetchAllPatients(),
+        api.get('/api/nurse-assignments', { headers }),
         api.get('/api/nurse-tasks', { params: { status: 'pending_approval' }, headers }),
+        getNurseDuties(),
       ]);
-      const rosterPatients: Patient[] = rosterResponse.data?.patients || [];
-      const nurseUsers: Nurse[] = rosterResponse.data?.nurses || [];
+      const nurseUsers: Nurse[] = nurseProfiles
+        .filter((profile) => profile.isHeadNurse || ['nurse', 'head nurse'].includes((profile.role || '').toLowerCase()))
+        .map((profile) => ({ ...profile, id: profile.id, _id: profile.id }));
+      const assignments = (assignmentsResponse.data?.assignments || []).map((assignment: any) => ({
+        ...assignment,
+        patientId: typeof assignment.patientId === 'object'
+          ? assignment.patientId.id || assignment.patientId._id
+          : assignment.patientId,
+      }));
+      const rosterPatients: Patient[] = await Promise.all(patientProfiles.map(async (profile) => {
+        let latestVitals = null;
+        try {
+          const response = await api.get(`/api/vitals/${profile.uid}/latest`, { headers });
+          latestVitals = response.data?.vitals || null;
+        } catch {
+          latestVitals = null;
+        }
+        return {
+          ...profile,
+          id: profile.uid,
+          _id: profile.uid,
+          patientId: profile.patientId,
+          assignments: assignments.filter((assignment: any) => String(assignment.patientId) === String(profile.uid)),
+          latestVitals,
+        };
+      }));
       const nurseResults = nurseUsers.map((nurse) => ({
         ...nurse,
         patients: rosterPatients.filter((patient) => (patient.assignments || []).some((assignment) => assignment.nurseId === idOf(nurse))),
@@ -132,12 +164,37 @@ export const HeadNurseDashboard: React.FC = () => {
       setNurses(nurseResults);
       setPatients(rosterPatients);
       setTasks(tasksResponse.data?.tasks || []);
+      setDuties(dutyResults);
     } catch (err: any) {
       setError(err.response?.data?.message || err.message || 'Unable to load head nurse data');
     } finally {
       setLoading(false);
     }
   }, [authHeaders, user?.id]);
+
+  const dutyStateCounts = duties.reduce((counts, duty) => {
+    const state = dutyWindow(duty).state;
+    if (state === 'active') counts.active += 1;
+    if (state === 'scheduled') counts.scheduled += 1;
+    return counts;
+  }, { active: 0, scheduled: 0 });
+
+  const handleScheduleDuty = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!dutyForm.nurseId || !dutyForm.dutyDate || !user?.id) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await createNurseDuty({ ...dutyForm, assignedBy: user.id, wardId: null });
+      setFeedback('Duty scheduled successfully.');
+      setDutyForm((current) => ({ ...current, nurseId: '', wardName: '', dutyDate: '', notes: '' }));
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.message || err.message || 'Unable to schedule duty');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleAssignGroup = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -180,6 +237,8 @@ export const HeadNurseDashboard: React.FC = () => {
   useEffect(() => {
     if (user?.id) loadData();
   }, [loadData, user?.id]);
+
+  useEffect(() => subscribeToNurseDuties(undefined, setDuties), []);
 
   const patientOptions = useMemo(() => {
     return patients.map((patient) => ({ patient, nurseId: '' }));
@@ -259,6 +318,27 @@ export const HeadNurseDashboard: React.FC = () => {
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 12 }}><CircularProgress sx={{ color: colors.blue }} /></Box>
         ) : (
           <Stack spacing={3}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 2 }}>
+              {[['Active', dutyStateCounts.active, colors.green], ['Scheduled', dutyStateCounts.scheduled, colors.amber], ['Off duty', Math.max(nurses.length - dutyStateCounts.active - dutyStateCounts.scheduled, 0), colors.muted], ['Pending approvals', tasks.length, colors.blue]].map(([label, value, color]) => <Paper key={String(label)} elevation={0} sx={{ p: 2, border: `1px solid ${colors.border}`, borderRadius: '12px' }}><Typography variant="caption" sx={{ color: colors.muted }}>{label}</Typography><Typography variant="h4" sx={{ color, fontWeight: 850 }}>{value}</Typography></Paper>)}
+            </Box>
+            <Paper component="form" onSubmit={handleScheduleDuty} elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${colors.border}`, borderRadius: '14px' }}>
+              <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}><Schedule sx={{ color: colors.teal }} /><Typography variant="h6" sx={{ color: colors.navy, fontWeight: 800 }}>Duty planner</Typography></Stack>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 2 }}>
+                <FormControl size="small" required><InputLabel>Nurse</InputLabel><Select value={dutyForm.nurseId} label="Nurse" onChange={(event) => setDutyForm((current) => ({ ...current, nurseId: event.target.value }))}>{nurses.map((nurse) => <MenuItem key={idOf(nurse)} value={idOf(nurse)}>{nurse.name || nurse.email || 'Nurse'}</MenuItem>)}</Select></FormControl>
+                <TextField size="small" label="Ward" value={dutyForm.wardName} onChange={(event) => setDutyForm((current) => ({ ...current, wardName: event.target.value }))} required />
+                <TextField size="small" label="Duty date" type="date" value={dutyForm.dutyDate} onChange={(event) => setDutyForm((current) => ({ ...current, dutyDate: event.target.value }))} InputLabelProps={{ shrink: true }} required />
+                <FormControl size="small"><InputLabel>Shift</InputLabel><Select value={dutyForm.shift} label="Shift" onChange={(event) => setDutyForm((current) => ({ ...current, shift: event.target.value as NonNullable<NurseDuty['shift']> }))}><MenuItem value="morning">Morning</MenuItem><MenuItem value="evening">Evening</MenuItem><MenuItem value="night">Night</MenuItem><MenuItem value="custom">Custom</MenuItem></Select></FormControl>
+                <TextField size="small" label="Start" type="time" value={dutyForm.startTime} onChange={(event) => setDutyForm((current) => ({ ...current, startTime: event.target.value }))} InputLabelProps={{ shrink: true }} required />
+                <TextField size="small" label="End" type="time" value={dutyForm.endTime} onChange={(event) => setDutyForm((current) => ({ ...current, endTime: event.target.value }))} InputLabelProps={{ shrink: true }} required />
+                <TextField size="small" label="Notes" value={dutyForm.notes} onChange={(event) => setDutyForm((current) => ({ ...current, notes: event.target.value }))} />
+                <Button type="submit" variant="contained" disabled={submitting} sx={{ backgroundColor: colors.teal, borderRadius: '8px' }}>Schedule duty</Button>
+              </Box>
+            </Paper>
+            <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${colors.border}`, borderRadius: '14px' }}>
+              <Typography variant="h6" sx={{ color: colors.navy, fontWeight: 800, mb: 1 }}>Upcoming duties</Typography>
+              {duties.filter((duty) => dutyWindow(duty).state === 'scheduled').slice(0, 8).map((duty) => <Box key={duty.id || duty._id} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, py: 1.25, borderBottom: `1px solid ${colors.border}` }}><Typography sx={{ color: colors.navy, fontWeight: 700 }}>{duty.dutyDate} · {duty.startTime}-{duty.endTime}</Typography><Typography sx={{ color: colors.muted }}>{duty.wardName || 'Ward'} · {nurses.find((nurse) => idOf(nurse) === duty.nurseId)?.name || 'Nurse'}</Typography></Box>)}
+              {duties.filter((duty) => dutyWindow(duty).state === 'scheduled').length === 0 && <Typography sx={{ color: colors.muted, py: 2 }}>No upcoming duties scheduled.</Typography>}
+            </Paper>
             <Paper component="form" onSubmit={handleAssignGroup} elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${colors.border}`, borderRadius: '14px' }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
                 <SupervisorAccount sx={{ color: colors.teal }} />

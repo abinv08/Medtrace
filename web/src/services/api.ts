@@ -4,7 +4,9 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  onSnapshot,
   query,
+  serverTimestamp,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -19,10 +21,32 @@ type ApiResponse<T = any> = { data: T; headers: Record<string, string> };
 const unwrap = (value: any) => typeof value?.toDate === 'function' ? value.toDate().toISOString() : value;
 const withId = (snapshot: any) => ({ id: snapshot.id, _id: snapshot.id, ...snapshot.data() });
 
-const all = async (name: string) => (await getDocs(collection(db, name))).docs.map(withId);
+const withTimeout = <T>(promise: Promise<T>, ms = 1200): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+
+const localCache: Record<string, any[]> = {};
+
+const all = async (name: string) => {
+  try {
+    const snap = await withTimeout(getDocs(collection(db, name)), 1200);
+    const docs = snap.docs.map(withId);
+    localCache[name] = docs;
+    return docs;
+  } catch {
+    return localCache[name] || [];
+  }
+};
+
 const filtered = async (name: string, field: string, value: unknown) => {
-  const snapshots = await getDocs(query(collection(db, name), where(field, '==', value)));
-  return snapshots.docs.map(withId);
+  try {
+    const snap = await withTimeout(getDocs(query(collection(db, name), where(field, '==', value))), 1200);
+    return snap.docs.map(withId);
+  } catch {
+    return (localCache[name] || []).filter((item: any) => item[field] === value);
+  }
 };
 
 const listByPatient = async (name: string, patientId: string) => {
@@ -36,6 +60,41 @@ const pathParts = (url: string) => {
 };
 
 const success = (data: Record<string, unknown>): ApiResponse => ({ data: { success: true, ...data }, headers: {} });
+
+const dutyCollection = 'nurseDuties';
+const dutyTime = (duty: any) => {
+  const date = String(duty.dutyDate || '');
+  const startTime = duty.startTime || '00:00';
+  const endTime = duty.endTime || '23:59';
+  const start = new Date(`${date}T${startTime}:00`);
+  const end = new Date(`${date}T${endTime}:00`);
+  if (end <= start) end.setDate(end.getDate() + 1);
+  return {
+    start: start.getTime(),
+    end: end.getTime(),
+  };
+};
+
+const overlapsDuty = (left: any, right: any) => {
+  const a = dutyTime(left);
+  const b = dutyTime(right);
+  return a.start < b.end && b.start < a.end;
+};
+
+const assertDutyTransition = (duty: any, action: string, userId?: string) => {
+  if (userId && duty.nurseId !== userId) throw new Error('You can only update your own duty attendance.');
+  const transitions: Record<string, [string, string[]]> = {
+    checkIn: ['checked_in', ['not_checked_in']],
+    startBreak: ['on_break', ['checked_in']],
+    endBreak: ['checked_in', ['on_break']],
+    checkOut: ['checked_out', ['checked_in']],
+  };
+  const transition = transitions[action];
+  if (!transition) return;
+  if (!transition[1].includes(duty.attendanceStatus || 'not_checked_in')) {
+    throw new Error(`Duty cannot ${action.replace(/([A-Z])/g, ' $1').toLowerCase()} from its current attendance state.`);
+  }
+};
 
 const get = async <T = any>(url: string, config: RequestConfig = {}): Promise<ApiResponse<T>> => {
   const { parts, query: urlQuery } = pathParts(url);
@@ -61,10 +120,12 @@ const get = async <T = any>(url: string, config: RequestConfig = {}): Promise<Ap
     }});
   }
   if (resource === 'patients') {
-    let patients = (await all('users')).filter((item: any) => ['patient', 'guardian'].includes(String(item.role || 'patient').toLowerCase()));
+    let patients = await all('patients');
+    if (!patients.length) patients = (await all('users')).filter((item: any) => ['patient', 'guardian'].includes(String(item.role || 'patient').toLowerCase()));
     if (params.doctorId) patients = patients.filter((item: any) => item.doctorId === params.doctorId);
     return success({ patients });
   }
+  if (resource === 'payments') return success({ payments: await all('payments') });
   if (resource === 'appointments') {
     let appointments = await all('appointments');
     if (params.patientId) appointments = appointments.filter((item: any) => item.patientId === params.patientId);
@@ -113,6 +174,13 @@ const get = async <T = any>(url: string, config: RequestConfig = {}): Promise<Ap
     Object.entries(params).forEach(([key, value]) => { tasks = tasks.filter((item: any) => String(item[key] || '') === String(value)); });
     return success({ tasks });
   }
+  if (resource === 'nurse-duties') {
+    let duties = await all(dutyCollection);
+    if (params.nurseId) duties = duties.filter((duty: any) => duty.nurseId === params.nurseId);
+    if (params.status) duties = duties.filter((duty: any) => duty.status === params.status);
+    duties.sort((a: any, b: any) => `${a.dutyDate}T${a.startTime}`.localeCompare(`${b.dutyDate}T${b.startTime}`));
+    return success({ duties });
+  }
   return success({});
 };
 
@@ -120,17 +188,61 @@ const post = async <T = any>(url: string, body: any = {}, _config: RequestConfig
   const { parts } = pathParts(url);
   const resource = parts[0];
   if (resource === 'auth') return success({ accessToken: body?.idToken || '', user: body });
+  if (resource === 'nurse-duties') {
+    const duties = await all(dutyCollection);
+    const candidate = { ...body, status: 'scheduled', attendanceStatus: 'not_checked_in' };
+    if (!candidate.nurseId || !candidate.dutyDate || !candidate.startTime || !candidate.endTime) throw new Error('Nurse, date, start time, and end time are required.');
+    if (dutyTime(candidate).start >= dutyTime(candidate).end) throw new Error('Duty end time must be after its start time.');
+    if (duties.some((duty: any) => duty.nurseId === candidate.nurseId && duty.status !== 'cancelled' && overlapsDuty(duty, candidate))) throw new Error('This nurse already has an overlapping duty.');
+    let createdId = `local-${Date.now()}`;
+    try {
+      const created = await withTimeout(addDoc(collection(db, dutyCollection), candidate), 1500);
+      createdId = created.id;
+    } catch {}
+    const dutyItem = { id: createdId, _id: createdId, ...candidate };
+    if (!localCache[dutyCollection]) localCache[dutyCollection] = [];
+    localCache[dutyCollection].push(dutyItem);
+    return success({ duty: dutyItem });
+  }
   const collectionName = resource === 'nurse-tasks' ? 'nurseTasks' : resource === 'nurse-assignments' ? 'nurseAssignments' : resource === 'clinical-notes' ? 'clinicalNotes' : resource === 'test-results' ? 'testResults' : resource === 'messages' ? 'messages' : resource === 'caretaker' ? 'caretakerAssignments' : resource === 'exercise-plans' ? 'exercisePlans' : resource;
   const record = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-  const created = await addDoc(collection(db, collectionName), record);
-  return success({ [resource === 'appointments' ? 'appointment' : resource === 'nurse-tasks' ? 'task' : resource === 'test-results' ? 'testResult' : resource === 'messages' ? 'message' : resource === 'clinical-notes' ? 'clinicalNote' : resource === 'caretaker' ? 'assignment' : resource === 'exercise-plans' ? 'exercisePlan' : resource]: { id: created.id, _id: created.id, ...record } });
+  let createdId = `local-${Date.now()}`;
+  try {
+    const created = await withTimeout(addDoc(collection(db, collectionName), record), 1500);
+    createdId = created.id;
+  } catch {}
+  const item = { id: createdId, _id: createdId, ...record };
+  if (!localCache[collectionName]) localCache[collectionName] = [];
+  localCache[collectionName].push(item);
+  return success({ [resource === 'appointments' ? 'appointment' : resource === 'nurse-tasks' ? 'task' : resource === 'test-results' ? 'testResult' : resource === 'messages' ? 'message' : resource === 'clinical-notes' ? 'clinicalNote' : resource === 'caretaker' ? 'assignment' : resource === 'exercise-plans' ? 'exercisePlan' : resource]: item });
 };
 
 const put = async <T = any>(url: string, body: any = {}, _config: RequestConfig = {}): Promise<ApiResponse<T>> => {
   const { parts } = pathParts(url);
   const resource = parts[0];
   const id = parts[1];
-  const collectionName = resource === 'nurse-tasks' ? 'nurseTasks' : resource === 'nurse-assignments' ? 'nurseAssignments' : resource === 'admin' ? 'users' : resource === 'exercise-plans' ? 'exercisePlans' : resource;
+  if (resource === 'nurse-duties') {
+    const dutyRef = doc(db, dutyCollection, id);
+    const current = (await getDocs(query(collection(db, dutyCollection), where('__name__', '==', id)))).docs[0];
+    if (!current) throw new Error('Duty not found.');
+    const duty = withId(current);
+    const action = parts[2];
+    if (['checkIn', 'startBreak', 'endBreak', 'checkOut'].includes(action)) {
+      assertDutyTransition(duty, action, body.userId);
+      const updates: Record<string, unknown> = { updatedAt: serverTimestamp() };
+      if (action === 'checkIn') updates.attendanceStatus = 'checked_in';
+      if (action === 'startBreak') { updates.attendanceStatus = 'on_break'; updates.breakStartedAt = serverTimestamp(); }
+      if (action === 'endBreak') { updates.attendanceStatus = 'checked_in'; updates.breakEndedAt = serverTimestamp(); }
+      if (action === 'checkOut') { updates.attendanceStatus = 'checked_out'; updates.checkOutAt = serverTimestamp(); updates.status = 'completed'; }
+      if (action === 'cancel') updates.status = 'cancelled';
+      if (action === 'complete') updates.status = 'completed';
+      await updateDoc(dutyRef, updates);
+      return success({});
+    }
+    await updateDoc(dutyRef, { ...body, updatedAt: serverTimestamp() });
+    return success({});
+  }
+  const collectionName = resource === 'nurse-tasks' ? 'nurseTasks' : resource === 'nurse-assignments' ? 'nurseAssignments' : resource === 'admin' ? 'users' : resource === 'caretaker' ? 'caretakerAssignments' : resource === 'exercise-plans' ? 'exercisePlans' : resource;
   if (resource === 'admin' && parts[1] === 'users') return put(`/users/${parts[2]}`, { isActive: false });
   if (resource === 'nurse-tasks' && parts[2] === 'complete') body = { status: 'completed' };
   if (resource === 'nurse-tasks' && (parts[2] === 'approve' || parts[2] === 'reject')) body = { ...body, status: parts[2] === 'approve' ? 'approved' : 'rejected' };

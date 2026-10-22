@@ -107,6 +107,55 @@ export const getPatients = async (
   }
 };
 
+// PATCH /api/patients/:id/status - Mark a patient active on arrival or inactive on discharge
+export const updatePatientStatus = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (status !== 'active' && status !== 'inactive') {
+      res.status(400).json({ success: false, message: 'status must be active or inactive' });
+      return;
+    }
+
+    let patient: any = null;
+    try {
+      if (mongoose.isValidObjectId(id)) patient = await Patient.findById(id);
+      if (!patient && mongoose.isValidObjectId(id)) patient = await Patient.findOne({ userId: id });
+      if (!patient) {
+        res.status(404).json({ success: false, message: 'Patient profile not found' });
+        return;
+      }
+      patient.status = status;
+      await patient.save();
+    } catch {
+      patient = memoryPatients.get(id);
+      if (!patient) {
+        for (const candidate of memoryPatients.values()) {
+          if (candidate.userId === id || candidate.userId?._id?.toString() === id) {
+            patient = candidate;
+            break;
+          }
+        }
+      }
+      if (!patient) {
+        res.status(404).json({ success: false, message: 'Patient profile not found' });
+        return;
+      }
+      patient.status = status;
+      patient.updatedAt = new Date();
+      memoryPatients.set(patient._id?.toString() || id, patient);
+    }
+
+    res.status(200).json({ success: true, message: `Patient marked ${status}`, patient });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: 'Error updating patient status', error: error.message });
+  }
+};
+
 // POST /api/patients - Create patient profile
 export const createPatient = async (
   req: AuthenticatedRequest,

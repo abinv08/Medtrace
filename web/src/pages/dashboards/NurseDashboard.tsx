@@ -5,7 +5,11 @@ import {
   Button,
   CircularProgress,
   Divider,
+  FormControl,
+  InputLabel,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   TextField,
   Typography,
@@ -21,6 +25,7 @@ import { useNavigate } from 'react-router-dom';
 import { Navbar } from '../../components/Navbar';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
+import { createShiftHandover, dutyWindow, getNurseDuties, NurseDuty, subscribeToNurseDuties, updateDutyAttendance } from '../../services/nurseDutyService';
 
 const C = {
   primary: '#1565C0',
@@ -96,12 +101,14 @@ export const NurseDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [patients, setPatients] = useState<AssignedPatient[]>([]);
   const [tasks, setTasks] = useState<NurseTask[]>([]);
+  const [duties, setDuties] = useState<NurseDuty[]>([]);
   const [forms, setForms] = useState<Record<string, VitalsForm>>({});
   const [loading, setLoading] = useState(true);
   const [savingVitals, setSavingVitals] = useState<string | null>(null);
   const [completingTask, setCompletingTask] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
+  const [handover, setHandover] = useState({ patientId: '', condition: '', observations: '', medicationStatus: '', pendingTasks: '', specialInstructions: '', notes: '' });
 
   const loadData = useCallback(async () => {
     const nurseId = user?.id || (user as any)?._id || (user as any)?.uid;
@@ -111,9 +118,10 @@ export const NurseDashboard: React.FC = () => {
     try {
       const activeToken = token || await getToken();
       const headers = activeToken ? { Authorization: `Bearer ${activeToken}` } : {};
-      const [assignmentsResponse, tasksResponse] = await Promise.all([
+      const [assignmentsResponse, tasksResponse, dutyResults] = await Promise.all([
         api.get(`/api/nurse-assignments/${nurseId}/patients`, { headers }),
         api.get('/api/nurse-tasks', { params: { assignedNurse: nurseId, status: 'approved' }, headers }),
+        getNurseDuties(nurseId),
       ]);
 
       const assignments = assignmentsResponse.data?.assignments || [];
@@ -134,6 +142,7 @@ export const NurseDashboard: React.FC = () => {
 
       setPatients(withVitals);
       setTasks(tasksResponse.data?.tasks || []);
+      setDuties(dutyResults);
       setForms((current) => {
         const next = { ...current };
         withVitals.forEach((patient) => { if (!next[patient.patientId]) next[patient.patientId] = emptyVitals(); });
@@ -146,7 +155,41 @@ export const NurseDashboard: React.FC = () => {
     }
   }, [getToken, token, user]);
 
+  const activeDuty = duties.find((duty) => dutyWindow(duty).state === 'active');
+  const upcomingDuty = duties.find((duty) => dutyWindow(duty).state === 'scheduled');
+  const currentDuty = activeDuty || upcomingDuty;
+
+  const handleDutyAction = async (action: 'checkIn' | 'startBreak' | 'endBreak' | 'checkOut') => {
+    if (!activeDuty || !user?.id) return;
+    setError('');
+    try {
+      await updateDutyAttendance(activeDuty.id || activeDuty._id, action, user.id);
+      setFeedback(action === 'checkIn' ? 'Duty checked in.' : action === 'checkOut' ? 'Duty checked out.' : action === 'startBreak' ? 'Break started.' : 'Break ended.');
+      await loadData();
+    } catch (err: any) {
+      setError(err.response?.data?.message || err.message || 'Unable to update duty attendance');
+    }
+  };
+
+  const handleHandover = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!activeDuty || !user?.id || !handover.patientId || !handover.condition.trim()) return;
+    try {
+      await createShiftHandover({ ...handover, dutyId: activeDuty.id || activeDuty._id, nurseId: user.id });
+      setHandover({ patientId: '', condition: '', observations: '', medicationStatus: '', pendingTasks: '', specialInstructions: '', notes: '' });
+      setFeedback('Shift handover submitted.');
+    } catch (err: any) {
+      setError(err.message || 'Unable to submit shift handover');
+    }
+  };
+
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    const nurseId = user?.id || (user as any)?._id || (user as any)?.uid;
+    if (!nurseId) return undefined;
+    return subscribeToNurseDuties(nurseId, setDuties);
+  }, [user]);
 
   const updateForm = (patientId: string, field: keyof VitalsForm, value: string) => {
     setForms((current) => ({ ...current, [patientId]: { ...(current[patientId] || emptyVitals()), [field]: value } }));
@@ -216,6 +259,22 @@ export const NurseDashboard: React.FC = () => {
 
         {loading ? <Box sx={{ display: 'flex', justifyContent: 'center', py: 12 }}><CircularProgress sx={{ color: C.primary }} /></Box> : (
           <Stack spacing={3}>
+            <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${C.border}`, borderRadius: '14px', backgroundColor: activeDuty ? '#ECFDF5' : '#FFFBEB' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2, flexWrap: 'wrap' }}>
+                <Box>
+                  <Typography variant="overline" sx={{ color: activeDuty ? C.green : C.amber, fontWeight: 800, letterSpacing: 1 }}>{activeDuty ? 'Active duty' : upcomingDuty ? 'Upcoming duty' : 'Off duty'}</Typography>
+                  <Typography variant="h5" sx={{ color: C.slate, fontWeight: 850 }}>{currentDuty ? `${currentDuty.startTime} - ${currentDuty.endTime}` : 'No duty assigned'}</Typography>
+                  <Typography sx={{ color: C.muted }}>{currentDuty?.wardName || 'Hospital nursing roster'}{currentDuty?.dutyDate ? ` · ${currentDuty.dutyDate}` : ''}</Typography>
+                  {activeDuty && <Typography variant="body2" sx={{ color: C.muted, mt: 1 }}>Attendance: {(activeDuty.attendanceStatus || 'not_checked_in').replace(/_/g, ' ')}</Typography>}
+                </Box>
+                {activeDuty && <Stack direction="row" spacing={1} flexWrap="wrap" justifyContent="flex-end">
+                  {activeDuty.attendanceStatus === 'not_checked_in' && <Button variant="contained" onClick={() => handleDutyAction('checkIn')} sx={{ backgroundColor: C.green, borderRadius: '8px' }}>Check in</Button>}
+                  {activeDuty.attendanceStatus === 'checked_in' && <Button variant="outlined" onClick={() => handleDutyAction('startBreak')} sx={{ borderColor: C.amber, color: C.amber, borderRadius: '8px' }}>Start break</Button>}
+                  {activeDuty.attendanceStatus === 'on_break' && <Button variant="outlined" onClick={() => handleDutyAction('endBreak')} sx={{ borderColor: C.primary, color: C.primary, borderRadius: '8px' }}>End break</Button>}
+                  {activeDuty.attendanceStatus === 'checked_in' && <Button variant="contained" onClick={() => handleDutyAction('checkOut')} sx={{ backgroundColor: C.slate, borderRadius: '8px' }}>Check out</Button>}
+                </Stack>}
+              </Box>
+            </Paper>
             <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${C.border}`, borderRadius: '14px' }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
                 <MonitorHeart sx={{ color: C.teal }} />
@@ -260,6 +319,15 @@ export const NurseDashboard: React.FC = () => {
                 </Box>
               )}
             </Paper>
+            {activeDuty && <Paper component="form" onSubmit={handleHandover} elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${C.border}`, borderRadius: '14px' }}>
+              <Typography variant="h6" sx={{ color: C.slate, fontWeight: 800, mb: 2 }}>Shift handover</Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)' }, gap: 2 }}>
+                <FormControl size="small" required><InputLabel>Patient</InputLabel><Select value={handover.patientId} label="Patient" onChange={(event) => setHandover((current) => ({ ...current, patientId: event.target.value }))}>{patients.map((patient) => <MenuItem key={patient.patientId} value={patient.patientId}>{getPatientName(patient.patient)}</MenuItem>)}</Select></FormControl>
+                <TextField size="small" label="Condition" required value={handover.condition} onChange={(event) => setHandover((current) => ({ ...current, condition: event.target.value }))} />
+                {(['observations', 'medicationStatus', 'pendingTasks', 'specialInstructions', 'notes'] as const).map((field) => <TextField key={field} size="small" label={field.replace(/([A-Z])/g, ' $1')} multiline minRows={2} value={handover[field]} onChange={(event) => setHandover((current) => ({ ...current, [field]: event.target.value }))} />)}
+                <Button type="submit" variant="contained" sx={{ backgroundColor: C.primary, borderRadius: '8px' }}>Submit handover</Button>
+              </Box>
+            </Paper>}
 
             <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${C.border}`, borderRadius: '14px' }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}><TaskAlt sx={{ color: C.amber }} /><Typography variant="h6" sx={{ color: C.slate, fontWeight: 800 }}>My Tasks</Typography><Typography variant="body2" sx={{ color: C.muted, ml: 'auto' }}>{tasks.length} approved</Typography></Stack>

@@ -69,6 +69,11 @@ const PatientSchema = new mongoose_1.Schema({
         },
     ],
     medicalHistory: [MedicalHistorySchema],
+    status: {
+        type: String,
+        enum: ['active', 'inactive'],
+        default: 'inactive',
+    },
 }, {
     timestamps: true,
 });

@@ -10,6 +10,7 @@ import { RoleDashboard } from './pages/dashboards/RoleDashboards';
 import { MedicalReportPage } from './pages/MedicalReportPage';
 import { CSIBreathingMonitor } from './pages/CSIBreathingMonitor';
 import PatientDetailPage from './pages/PatientDetailPage';
+import { ReceptionDashboard } from './pages/dashboards/ReceptionDashboard';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
@@ -23,7 +24,7 @@ export const App: React.FC = () => {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter future={{ v7_relativeSplatPath: true }}>
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
@@ -33,6 +34,14 @@ export const App: React.FC = () => {
               element={
                 <ProtectedRoute>
                   <RoleDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reception"
+              element={
+                <ProtectedRoute>
+                  <ReceptionDashboard />
                 </ProtectedRoute>
               }
             />

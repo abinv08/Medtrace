@@ -44,7 +44,26 @@ export interface PatientSearchResult {
   allergies?: string;
   createdAt?: string;
   reportCount?: number;
+  careStatus?: 'active' | 'at_home';
+  admittedAt?: string;
+  dischargedAt?: string;
+  dischargedBy?: string;
 }
+
+export const updatePatientCareStatus = async (
+  patientUid: string,
+  careStatus: 'active' | 'at_home',
+  doctor: { id: string; name: string }
+): Promise<void> => {
+  const now = new Date().toISOString();
+  await updateDoc(doc(db, 'users', patientUid), {
+    careStatus,
+    ...(careStatus === 'active'
+      ? { admittedAt: now, dischargedAt: null, dischargedBy: null }
+      : { dischargedAt: now, dischargedBy: doctor.name }),
+    updatedAt: serverTimestamp(),
+  });
+};
 
 export interface DoctorNote {
   id: string;
@@ -194,6 +213,10 @@ export const fetchAllPatients = async (): Promise<PatientSearchResult[]> => {
             bloodGroup: data.bloodGroup,
             chronicConditions: data.chronicConditions,
             allergies: data.allergies,
+            careStatus: data.careStatus || 'at_home',
+            admittedAt: data.admittedAt,
+            dischargedAt: data.dischargedAt,
+            dischargedBy: data.dischargedBy,
             createdAt: data.createdAt instanceof Timestamp
               ? data.createdAt.toDate().toISOString()
               : data.createdAt || new Date().toISOString(),

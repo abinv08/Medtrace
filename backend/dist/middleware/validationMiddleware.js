@@ -33,6 +33,7 @@ exports.registerValidationRules = [
         .isIn([
         'Doctor',
         'Nurse',
+        'Head Nurse',
         'Patient',
         'Caregiver',
         'Guardian',

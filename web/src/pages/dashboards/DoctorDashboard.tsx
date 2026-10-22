@@ -39,6 +39,7 @@ import {
   searchPatientsByName,
   fetchAllPatients,
   fetchPatientProfile,
+  updatePatientCareStatus,
   addDoctorNote,
   saveAIFeedback,
   DoctorNote,
@@ -301,6 +302,10 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
             gender: p.gender,
             bloodGroup: p.bloodGroup,
             chronicConditions: conditions,
+            careStatus: p.careStatus || 'at_home',
+            admittedAt: p.admittedAt,
+            dischargedAt: p.dischargedAt,
+            dischargedBy: p.dischargedBy,
             createdAt: p.createdAt ? String(p.createdAt) : undefined,
           };
         });
@@ -350,6 +355,24 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
+
+  const handleCareStatusChange = async () => {
+    if (!selectedPatient || !user?.id) return;
+    const nextStatus = selectedPatient.careStatus === 'active' ? 'at_home' : 'active';
+    setPatientFetchError(null);
+    try {
+      await updatePatientCareStatus(selectedPatient.uid, nextStatus, {
+        id: user.id,
+        name: user.name || 'Doctor',
+      });
+      setSelectedPatient({ ...selectedPatient, careStatus: nextStatus, dischargedBy: nextStatus === 'at_home' ? user.name : undefined });
+      setAllPatients((current: PatientSearchResult[]) => current.map((patient) => (
+        patient.uid === selectedPatient.uid ? { ...patient, careStatus: nextStatus } : patient
+      )));
+    } catch (err: any) {
+      setPatientFetchError(err.message || 'Unable to update patient hospital status');
+    }
+  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -641,6 +664,32 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                     <Typography variant="caption" sx={{ color: C.red, display: 'block' }}>
                       🚫 Allergies: {selectedPatient.allergies}
                     </Typography>
+                  )}
+                </Box>
+                <Box display="flex" flexDirection="column" alignItems="flex-end" gap={1}>
+                  <Chip
+                    label={selectedPatient.careStatus === 'active' ? 'ACTIVE · IN HOSPITAL' : 'AT HOME · DISCHARGED'}
+                    size="small"
+                    sx={{
+                      backgroundColor: selectedPatient.careStatus === 'active' ? `${C.red}14` : `${C.green}14`,
+                      color: selectedPatient.careStatus === 'active' ? C.red : C.green,
+                      fontWeight: 800,
+                    }}
+                  />
+                  {selectedPatient.careStatus === 'active' && (
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={handleCareStatusChange}
+                      sx={{
+                        borderRadius: '8px',
+                        fontWeight: 700,
+                        borderColor: C.red,
+                        color: C.red,
+                      }}
+                    >
+                      Discharge Patient
+                    </Button>
                   )}
                 </Box>
                 <Box display="flex" gap={1.5}>

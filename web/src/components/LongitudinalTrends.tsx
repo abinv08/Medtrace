@@ -55,6 +55,7 @@ interface LongitudinalTrendsProps {
   vitals?: VitalReading[];
   onVitalsUpdated?: () => void;
   onAnomalyDetected?: (anomalies: AnomalyAlert[]) => void;
+  allowManualEntry?: boolean;
 }
 
 type MetricType = 'bp' | 'glucose' | 'heartRate' | 'spO2' | 'weight' | 'cholesterol';
@@ -64,6 +65,7 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
   vitals,
   onVitalsUpdated,
   onAnomalyDetected,
+  allowManualEntry = true,
 }) => {
   const [selectedMetric, setSelectedMetric] = useState<MetricType>('bp');
   const [timeRange, setTimeRange] = useState<number>(30); // 7, 14, 30 days
@@ -89,7 +91,10 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
     setError(null);
     try {
       const now = new Date();
-      const fromDate = new Date(now.getTime() - timeRange * 24 * 60 * 60 * 1000).toISOString();
+      const from = new Date(now);
+      from.setHours(0, 0, 0, 0);
+      from.setDate(from.getDate() - (timeRange - 1));
+      const fromDate = from.toISOString();
       const toDate = now.toISOString();
 
       const response = await api.get(`/api/vitals/${encodeURIComponent(patientId)}`, {
@@ -157,6 +162,12 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
     return historicalVitals;
   }, [historicalVitals]);
 
+  const coverage = useMemo(() => {
+    const recordedDates = new Set(filteredData.map((reading) => reading.date));
+    const recordedDays = Math.min(recordedDates.size, timeRange);
+    return { recordedDays, missingDays: timeRange - recordedDays };
+  }, [filteredData, timeRange]);
+
   const baselines = useMemo(() => getBaselineStatistics(filteredData), [filteredData]);
 
   // Format date tick
@@ -168,6 +179,7 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
   };
 
   const handleSaveVital = async () => {
+    if (!allowManualEntry) return;
     setSubmitting(true);
     try {
       const today = new Date().toISOString().split('T')[0];
@@ -302,30 +314,65 @@ export const LongitudinalTrends: React.FC<LongitudinalTrendsProps> = ({
             ))}
           </ButtonGroup>
 
-          {/* Log reading button */}
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<Add />}
-            onClick={() => setOpenLogModal(true)}
-            sx={{
-              borderRadius: '999px',
-              backgroundColor: '#1565C0',
-              fontWeight: 700,
-              fontSize: '0.8rem',
-              '&:hover': { backgroundColor: '#0D47A1' },
-            }}
-          >
-            Log Vitals
-          </Button>
+          {allowManualEntry ? (
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<Add />}
+              onClick={() => setOpenLogModal(true)}
+              sx={{
+                borderRadius: '999px',
+                backgroundColor: '#1565C0',
+                fontWeight: 700,
+                fontSize: '0.8rem',
+                '&:hover': { backgroundColor: '#0D47A1' },
+              }}
+            >
+              Log Vitals
+            </Button>
+          ) : (
+            <Chip
+              label="Hospital monitoring active"
+              size="small"
+              sx={{ backgroundColor: '#FEF2F2', color: '#B91C1C', fontWeight: 700 }}
+            />
+          )}
         </Box>
       </Box>
+
+      {!allowManualEntry && (
+        <Alert severity="info" sx={{ mb: 2, borderRadius: '10px' }}>
+          Manual health trend updates are disabled while you are an active inpatient. Hospital staff will record your readings.
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="warning" onClose={() => setError(null)} sx={{ mb: 2, borderRadius: '10px' }}>
           {error}
         </Alert>
       )}
+
+      <Paper elevation={0} sx={{ p: 2, mb: 2.5, borderRadius: '12px', border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC' }}>
+        <Box display="flex" alignItems="center" justifyContent="space-between" gap={2} flexWrap="wrap">
+          <Box>
+            <Typography variant="caption" sx={{ color: '#64748B', fontWeight: 700, display: 'block' }}>
+              VITALS COVERAGE · LAST {timeRange} DAYS
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#1E293B', fontWeight: 700 }}>
+              {coverage.recordedDays} day{coverage.recordedDays === 1 ? '' : 's'} marked · {coverage.missingDays} day{coverage.missingDays === 1 ? '' : 's'} not marked
+            </Typography>
+          </Box>
+          <Chip
+            label={`${coverage.recordedDays}/${timeRange} days recorded`}
+            size="small"
+            sx={{
+              color: coverage.missingDays === 0 ? '#059669' : '#D97706',
+              backgroundColor: coverage.missingDays === 0 ? '#ECFDF5' : '#FFFBEB',
+              fontWeight: 800,
+            }}
+          />
+        </Box>
+      </Paper>
 
       {/* Metric Selector Tabs */}
       <Box display="flex" gap={1} overflow="auto" pb={1.5} mb={3}>

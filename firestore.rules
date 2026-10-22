@@ -3,11 +3,23 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function roleIs(roles) {
+      return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in roles;
+    }
+
     // ── Users collection ───────────────────────────────────────────────────────
     // Each document ID is the Firebase UID.
     match /users/{userId} {
-      // A logged-in user can always read and write their own document.
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Users can create their own profile and update it without changing their role.
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role;
+      allow read: if request.auth != null && request.auth.uid == userId;
 
       // Allow any authenticated user to read another user's document by UID
       // (needed for doctor → patient look-ups, caretaker assignments, etc.)
@@ -17,6 +29,13 @@ service cloud.firestore {
       allow update: if request.auth != null
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['Admin', 'Hospital Administrator']
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved';
+
+      allow update: if request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Doctor'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'careStatus', 'admittedAt', 'dischargedAt', 'dischargedBy', 'updatedAt'
+        ]);
     }
 
     // ── Appointments ───────────────────────────────────────────────────────────
@@ -62,11 +81,42 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    match /nurseDuties/{dutyId} {
+      allow read: if roleIs(['Admin', 'Hospital Administrator', 'Head Nurse'])
+        || (signedIn() && resource.data.nurseId == request.auth.uid);
+      allow create: if roleIs(['Admin', 'Hospital Administrator', 'Head Nurse'])
+        && request.resource.data.nurseId is string
+        && request.resource.data.status == 'scheduled';
+      allow update: if roleIs(['Admin', 'Hospital Administrator', 'Head Nurse'])
+        || (signedIn() && resource.data.nurseId == request.auth.uid
+          && request.resource.data.nurseId == resource.data.nurseId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'attendanceStatus', 'checkInAt', 'checkOutAt', 'breakStartedAt', 'breakEndedAt', 'updatedAt', 'status'
+          ]));
+      allow delete: if roleIs(['Admin', 'Hospital Administrator', 'Head Nurse']);
+    }
+
+    match /shiftHandovers/{handoverId} {
+      allow read: if signedIn();
+      allow create: if roleIs(['Admin', 'Hospital Administrator', 'Head Nurse', 'Nurse'])
+        && request.resource.data.nurseId == request.auth.uid;
+      allow update: if signedIn() && resource.data.nurseId == request.auth.uid;
+    }
+
     match /clinicalNotes/{docId} {
       allow read, write: if request.auth != null;
     }
 
     match /messages/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Reception intake and payments ────────────────────────────────────────
+    match /patients/{docId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /payments/{docId} {
       allow read, write: if request.auth != null;
     }
 

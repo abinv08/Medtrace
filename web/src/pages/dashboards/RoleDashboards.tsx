@@ -7,6 +7,7 @@ import { AdminDashboard } from './AdminDashboard';
 import { CaretakerDashboard } from './CaretakerDashboard';
 import { HeadNurseDashboard } from './HeadNurseDashboard';
 import { NurseDashboard } from './NurseDashboard';
+import { ReceptionDashboard } from './ReceptionDashboard';
 import { checkIsAssignedCaretaker } from '../../services/caretakerService';
 
 // ─── Role → Dashboard mapping ─────────────────────────────────────────────────
@@ -37,6 +38,10 @@ export const RoleDashboard: React.FC = () => {
   }
 
   switch (role) {
+    case 'reception':
+    case 'receptionist':
+      return <ReceptionDashboard />;
+
     case 'head nurse':
       return <HeadNurseDashboard />;
 

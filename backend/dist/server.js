@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.app = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
@@ -22,6 +23,7 @@ const nurseAssignmentRoutes_1 = __importDefault(require("./routes/nurseAssignmen
 const nurseTaskRoutes_1 = __importDefault(require("./routes/nurseTaskRoutes"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
+exports.app = app;
 const PORT = process.env.PORT || 5000;
 // Allow the React dev server and Flutter web's changing local dev ports.
 app.use((0, cors_1.default)({
@@ -68,10 +70,13 @@ app.get('/api/health', (req, res) => {
     });
 });
 // Start DB connection & Express Listener
-(0, db_1.connectDB)().then(() => {
-    app.listen(PORT, () => {
-        console.log(`🚀 MedTrace Auth Central Backend running on port ${PORT}`);
-        console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
-        console.log(`🔗 API Base: http://localhost:${PORT}/api/auth`);
+if (process.env.NODE_ENV !== 'test') {
+    (0, db_1.connectDB)().then(() => {
+        app.listen(PORT, () => {
+            console.log(`🚀 MedTrace Auth Central Backend running on port ${PORT}`);
+            console.log(`🔗 Health Check: http://localhost:${PORT}/api/health`);
+            console.log(`🔗 API Base: http://localhost:${PORT}/api/auth`);
+        });
     });
-});
+}
+exports.default = app;

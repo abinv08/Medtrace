@@ -50,6 +50,9 @@ export const getRoleDashboardUrl = (role?: string): string => {
   if (r === 'admin' || r === 'administrator' || r === 'hospital admin' || r === 'hospital administrator') {
     return '/dashboard/admin';
   }
+  if (r === 'reception' || r === 'receptionist') {
+    return '/dashboard/reception';
+  }
   if (r === 'head nurse') return '/dashboard/head-nurse';
   if (r === 'nurse') return '/dashboard/nurse';
   if (r === 'doctor') return '/dashboard/doctor';

@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export type Gender = 'male' | 'female' | 'other';
+export type PatientStatus = 'active' | 'inactive';
 
 export interface IMedicalHistory {
   condition: string;
@@ -17,6 +18,7 @@ export interface IPatient extends Document {
   assignedDoctor?: mongoose.Types.ObjectId;
   assignedCaretakers: mongoose.Types.ObjectId[];
   medicalHistory: IMedicalHistory[];
+  status: PatientStatus;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +62,11 @@ const PatientSchema: Schema = new Schema(
       },
     ],
     medicalHistory: [MedicalHistorySchema],
+    status: {
+      type: String,
+      enum: ['active', 'inactive'],
+      default: 'inactive',
+    },
   },
   {
     timestamps: true,

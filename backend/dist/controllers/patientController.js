@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updatePatient = exports.createPatient = exports.getPatients = exports.getPatientById = void 0;
+exports.updatePatient = exports.createPatient = exports.updatePatientStatus = exports.getPatients = exports.getPatientById = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
 const Patient_1 = require("../models/Patient");
 // In-Memory Fallback Store if MongoDB is disconnected
@@ -96,6 +96,53 @@ const getPatients = async (req, res) => {
     }
 };
 exports.getPatients = getPatients;
+// PATCH /api/patients/:id/status - Mark a patient active on arrival or inactive on discharge
+const updatePatientStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (status !== 'active' && status !== 'inactive') {
+            res.status(400).json({ success: false, message: 'status must be active or inactive' });
+            return;
+        }
+        let patient = null;
+        try {
+            if (mongoose_1.default.isValidObjectId(id))
+                patient = await Patient_1.Patient.findById(id);
+            if (!patient && mongoose_1.default.isValidObjectId(id))
+                patient = await Patient_1.Patient.findOne({ userId: id });
+            if (!patient) {
+                res.status(404).json({ success: false, message: 'Patient profile not found' });
+                return;
+            }
+            patient.status = status;
+            await patient.save();
+        }
+        catch {
+            patient = memoryPatients.get(id);
+            if (!patient) {
+                for (const candidate of memoryPatients.values()) {
+                    if (candidate.userId === id || candidate.userId?._id?.toString() === id) {
+                        patient = candidate;
+                        break;
+                    }
+                }
+            }
+            if (!patient) {
+                res.status(404).json({ success: false, message: 'Patient profile not found' });
+                return;
+            }
+            patient.status = status;
+            patient.updatedAt = new Date();
+            memoryPatients.set(patient._id?.toString() || id, patient);
+        }
+        res.status(200).json({ success: true, message: `Patient marked ${status}`, patient });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, message: 'Error updating patient status', error: error.message });
+    }
+};
+exports.updatePatientStatus = updatePatientStatus;
 // POST /api/patients - Create patient profile
 const createPatient = async (req, res) => {
     try {

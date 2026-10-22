@@ -12,11 +12,13 @@ const taskStatuses = [
     'rejected',
     'completed',
 ];
-const populateTask = (query) => query
-    .populate('patientId')
-    .populate('assignedNurse', 'name email phone role')
-    .populate('assignedBy', 'name email role')
-    .populate('approvedBy', 'name email role');
+const populateOptions = [
+    { path: 'patientId' },
+    { path: 'assignedNurse', select: 'name email phone role' },
+    { path: 'assignedBy', select: 'name email role' },
+    { path: 'approvedBy', select: 'name email role' },
+];
+const populateTask = (target) => target.populate(populateOptions);
 const createNurseTask = async (req, res) => {
     try {
         const { patientId, assignedNurse, taskDescription, dueAt } = req.body;

@@ -8,6 +8,8 @@ const router = (0, express_1.Router)();
 router.use(authMiddleware_1.authenticateJWT);
 // Endpoint: GET /api/patients (list, filterable by ?doctorId=... or ?caretakerId=...)
 router.get('/', patientController_1.getPatients);
+// Endpoint: PUT /api/patients/:id/status (active on arrival, inactive on discharge)
+router.put('/:id/status', patientController_1.updatePatientStatus);
 // Endpoint: GET /api/patients/:id (get one by patient ID or user ID)
 router.get('/:id', patientController_1.getPatientById);
 // Endpoint: POST /api/patients (create patient profile)
