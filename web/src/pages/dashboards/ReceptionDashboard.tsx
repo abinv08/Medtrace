@@ -14,6 +14,7 @@ import api from '../../services/api';
 interface IntakePatient {
   id?: string;
   _id?: string;
+  patientId?: string;
   name: string;
   phone: string;
   dateOfBirth?: string;
@@ -22,7 +23,7 @@ interface IntakePatient {
   visitReason?: string;
   createdAt?: string;
   status?: 'active' | 'inactive';
-  userId?: { name?: string; phone?: string; email?: string } | string;
+  userId?: { name?: string; phone?: string; email?: string; patientId?: string } | string;
 }
 
 interface PaymentRecord {
@@ -52,6 +53,7 @@ export const ReceptionDashboard: React.FC = () => {
   const [feedback, setFeedback] = useState<{ message: string; severity: 'success' | 'error' } | null>(null);
 
   const getPatientId = (patient: IntakePatient) => patient.id || patient._id || (typeof patient.userId === 'string' ? patient.userId : undefined);
+  const getPatientDisplayId = (patient: IntakePatient) => patient.patientId || (typeof patient.userId === 'object' ? patient.userId.patientId : undefined) || getPatientId(patient);
   const getPatientPhone = (patient: IntakePatient) => patient.phone || (typeof patient.userId === 'object' ? patient.userId.phone || '' : '');
   const getPatientName = (patient: IntakePatient) => patient.name || (typeof patient.userId === 'object' ? patient.userId.name || 'Patient' : 'Patient');
 
@@ -223,7 +225,7 @@ export const ReceptionDashboard: React.FC = () => {
                 <LocalHospital sx={{ color: '#00838F' }} />
               </Stack>
               <TextField fullWidth size="small" placeholder="Search every patient by name or phone" value={search} onChange={(event) => setSearch(event.target.value)} InputProps={{ startAdornment: <InputAdornment position="start"><Search fontSize="small" /></InputAdornment> }} sx={{ mb: 1.5 }} />
-              {loading ? <Box sx={{ py: 5, textAlign: 'center' }}><CircularProgress size={24} /></Box> : filteredPatients.length === 0 ? <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>{search.trim() ? 'No matching patient found.' : 'No patients registered yet.'}</Typography> : filteredPatients.map((patient) => <Box key={getPatientId(patient) || getPatientPhone(patient)} sx={{ py: 1.5, borderBottom: '1px solid #EEF2F5' }}><Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}><Box><Typography fontWeight={600}>{getPatientName(patient)}</Typography><Typography variant="caption" color="text.secondary">{getPatientPhone(patient)} · {patient.gender || 'Gender not recorded'} · {patient.bloodGroup || 'Blood group not recorded'}</Typography><Typography variant="caption" display="block" color="text.secondary">Registered {formatTime(patient.createdAt)}</Typography></Box><Chip size="small" label={patient.status === 'active' ? 'Active' : 'Inactive'} color={patient.status === 'active' ? 'success' : 'default'} /></Stack><Stack direction="row" spacing={1} sx={{ mt: 1 }}>{patient.status !== 'active' && <Button size="small" variant="contained" color="success" onClick={() => updatePatientStatus(patient, 'active')}>Make active</Button>}{patient.status === 'active' && <Button size="small" color="inherit" onClick={() => updatePatientStatus(patient, 'inactive')}>Discharge</Button>}</Stack></Box>)}
+              {loading ? <Box sx={{ py: 5, textAlign: 'center' }}><CircularProgress size={24} /></Box> : filteredPatients.length === 0 ? <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>{search.trim() ? 'No matching patient found.' : 'No patients registered yet.'}</Typography> : <Box sx={{ maxHeight: 285, overflowY: 'auto', pr: 1, scrollbarGutter: 'stable' }}>{filteredPatients.map((patient) => <Box key={getPatientId(patient) || getPatientPhone(patient)} sx={{ py: 1.5, borderBottom: '1px solid #EEF2F5' }}><Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={1}><Box><Typography fontWeight={600}>{getPatientName(patient)} <Typography component="span" variant="caption" color="text.secondary">({getPatientDisplayId(patient)})</Typography></Typography><Typography variant="caption" color="text.secondary">{getPatientPhone(patient)} · {patient.gender || 'Gender not recorded'} · {patient.bloodGroup || 'Blood group not recorded'}</Typography><Typography variant="caption" display="block" color="text.secondary">Registered {formatTime(patient.createdAt)}</Typography></Box><Chip size="small" label={patient.status === 'active' ? 'Active' : 'Inactive'} color={patient.status === 'active' ? 'success' : 'default'} /></Stack><Stack direction="row" spacing={1} sx={{ mt: 1 }}>{patient.status !== 'active' && <Button size="small" variant="contained" color="success" onClick={() => updatePatientStatus(patient, 'active')}>Make active</Button>}{patient.status === 'active' && <Button size="small" color="inherit" onClick={() => updatePatientStatus(patient, 'inactive')}>Discharge</Button>}</Stack></Box>)}</Box>}
             </Paper>
             <Paper sx={{ mt: 2.5, p: { xs: 2.5, md: 3 }, bgcolor: '#E0F7FA', border: '1px solid #B2EBF2', boxShadow: 'none' }}>
               <Typography variant="subtitle2" color="#006064" fontWeight={700}>PAYMENT STATUS</Typography>

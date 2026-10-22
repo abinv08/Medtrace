@@ -7,6 +7,7 @@ import {
   onSnapshot,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -120,8 +121,15 @@ const get = async <T = any>(url: string, config: RequestConfig = {}): Promise<Ap
     }});
   }
   if (resource === 'patients') {
-    let patients = await all('patients');
-    if (!patients.length) patients = (await all('users')).filter((item: any) => ['patient', 'guardian'].includes(String(item.role || 'patient').toLowerCase()));
+    const patientRecords = await all('patients');
+    const userRecords = (await all('users')).filter((item: any) => ['patient', 'guardian'].includes(String(item.role || 'patient').toLowerCase()));
+    let patients = patientRecords.map((patient: any) => {
+      const userId = typeof patient.userId === 'object' ? patient.userId?.id || patient.userId?._id : patient.userId;
+      const user = userRecords.find((item: any) => item.id === userId || item._id === userId);
+      return user ? { ...user, ...patient, name: patient.name || user.name, phone: patient.phone || user.phone, patientId: patient.patientId || user.patientId } : patient;
+    });
+    const knownUserIds = new Set(patients.map((patient: any) => patient.userId || patient.id || patient._id));
+    patients.push(...userRecords.filter((user: any) => !knownUserIds.has(user.id || user._id)));
     if (params.doctorId) patients = patients.filter((item: any) => item.doctorId === params.doctorId);
     return success({ patients });
   }
@@ -246,13 +254,32 @@ const put = async <T = any>(url: string, body: any = {}, _config: RequestConfig 
   if (resource === 'admin' && parts[1] === 'users') return put(`/users/${parts[2]}`, { isActive: false });
   if (resource === 'nurse-tasks' && parts[2] === 'complete') body = { status: 'completed' };
   if (resource === 'nurse-tasks' && (parts[2] === 'approve' || parts[2] === 'reject')) body = { ...body, status: parts[2] === 'approve' ? 'approved' : 'rejected' };
+  if (resource === 'caretaker' && parts[2] === 'revoke') body = { ...body, status: 'revoked' };
+  if (resource === 'patients' && parts[2] === 'status') {
+    const patients = await all('patients');
+    const patient = patients.find((item: any) => item.id === id || item._id === id);
+    const updates = { ...body, updatedAt: new Date().toISOString() };
+    await setDoc(doc(db, 'patients', id), { ...(patient || {}), userId: patient?.userId || id, ...updates }, { merge: true });
+    if (!localCache.patients) localCache.patients = [];
+    const cachedPatient = { id, _id: id, ...(patient || {}), userId: patient?.userId || id, ...updates };
+    localCache.patients = localCache.patients.some((item) => item.id === id || item._id === id)
+      ? localCache.patients.map((item) => item.id === id || item._id === id ? { ...item, ...cachedPatient } : item)
+      : [...localCache.patients, cachedPatient];
+    return success({ patient: cachedPatient });
+  }
   if (resource === 'appointments' && parts[2] === 'status') body = { ...body, status: body.status, doctorNotes: body.notes };
   if (resource === 'exercise-plans' && parts[2] === 'progress') {
     const plans = await listByPatient('exercisePlans', id);
     if (plans[0]) body = { progressLog: [...(plans[0].progressLog || []), body] };
     else return success({});
   }
-  await updateDoc(doc(db, collectionName, id), { ...body, updatedAt: new Date().toISOString() });
+  const updates = { ...body, updatedAt: new Date().toISOString() };
+  await updateDoc(doc(db, collectionName, id), updates);
+  if (localCache[collectionName]) {
+    localCache[collectionName] = localCache[collectionName].map((item) =>
+      item.id === id || item._id === id ? { ...item, ...updates } : item
+    );
+  }
   return success({});
 };
 
