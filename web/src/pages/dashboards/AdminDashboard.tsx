@@ -651,8 +651,17 @@ export const AdminDashboard: React.FC = () => {
                 </Paper>
 
                 {/* Users Table */}
-                <TableContainer component={Paper} elevation={0} sx={{ borderRadius: '14px', border: `1px solid ${C.border}` }}>
-                  <Table size="small">
+                <TableContainer
+                  component={Paper}
+                  elevation={0}
+                  sx={{
+                    borderRadius: '14px',
+                    border: `1px solid ${C.border}`,
+                    height: 350,
+                    overflowY: 'auto',
+                  }}
+                >
+                  <Table size="small" stickyHeader>
                     <TableHead>
                       <TableRow sx={{ '& th': { backgroundColor: '#F8FAFC', fontWeight: 700, color: C.muted, fontSize: '0.75rem', py: 1.5 } }}>
                         <TableCell>User</TableCell>

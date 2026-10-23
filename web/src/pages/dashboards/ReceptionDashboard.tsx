@@ -2,14 +2,17 @@ import React, { useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Container, Divider, Grid,
   InputAdornment, MenuItem, Paper, Snackbar, Stack, TextField, Typography,
+  Tab, Tabs,
 } from '@mui/material';
 import {
   Add, CalendarMonth, CheckCircle, CreditCard, LocalHospital, Payments,
   PersonAdd, Phone, ReceiptLong, Search,
 } from '@mui/icons-material';
+import { collection, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { MedTraceLogo } from '../../components/Logo';
 import api from '../../services/api';
+import { db } from '../../config/firebase';
 
 interface IntakePatient {
   id?: string;
@@ -35,6 +38,14 @@ interface PaymentRecord {
   createdAt?: string;
 }
 
+interface ClinicalStaff {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  isActive?: boolean;
+}
+
 const initialForm = {
   name: '', phone: '', dateOfBirth: '', gender: '', bloodGroup: '', visitReason: '',
   amount: '', paymentMethod: 'Cash',
@@ -47,10 +58,14 @@ export const ReceptionDashboard: React.FC = () => {
   const [form, setForm] = useState(initialForm);
   const [patients, setPatients] = useState<IntakePatient[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [staff, setStaff] = useState<ClinicalStaff[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [search, setSearch] = useState('');
+  const [doctorSearch, setDoctorSearch] = useState('');
+  const [nurseSearch, setNurseSearch] = useState('');
   const [feedback, setFeedback] = useState<{ message: string; severity: 'success' | 'error' } | null>(null);
+  const [activeTab, setActiveTab] = useState(0);
 
   const getPatientId = (patient: IntakePatient) => patient.id || patient._id || (typeof patient.userId === 'string' ? patient.userId : undefined);
   const getPatientDisplayId = (patient: IntakePatient) => patient.patientId || (typeof patient.userId === 'object' ? patient.userId.patientId : undefined) || getPatientId(patient);
@@ -59,9 +74,10 @@ export const ReceptionDashboard: React.FC = () => {
 
   const loadActivity = async () => {
     setLoading(true);
-    const [patientResult, paymentResult] = await Promise.allSettled([
+    const [patientResult, paymentResult, staffResult] = await Promise.allSettled([
       api.get('/api/patients'),
       api.get('/api/payments'),
+      getDocs(query(collection(db, 'users'), where('role', 'in', ['Doctor', 'Nurse', 'Head Nurse']))),
     ]);
 
     if (patientResult.status === 'fulfilled') {
@@ -70,8 +86,18 @@ export const ReceptionDashboard: React.FC = () => {
     if (paymentResult.status === 'fulfilled') {
       setPayments(paymentResult.value.data?.payments || []);
     }
+    if (staffResult.status === 'fulfilled') {
+      setStaff(staffResult.value.docs
+        .map((staffDoc) => ({
+          id: staffDoc.id,
+          ...(staffDoc.data() as Omit<ClinicalStaff, 'id'>),
+        }))
+        .sort((first, second) => first.name.localeCompare(second.name)));
+    }
 
-    if (patientResult.status === 'rejected' && paymentResult.status === 'rejected') {
+    if (staffResult.status === 'rejected') {
+      setFeedback({ message: 'Patients and payments loaded, but clinical staff status is unavailable.', severity: 'error' });
+    } else if (patientResult.status === 'rejected' && paymentResult.status === 'rejected') {
       setFeedback({ message: 'Unable to load patients or payments. Please check your connection and sign in again.', severity: 'error' });
     } else if (patientResult.status === 'rejected') {
       setFeedback({ message: 'Unable to load registered patients. Please check your connection and sign in again.', severity: 'error' });
@@ -82,6 +108,16 @@ export const ReceptionDashboard: React.FC = () => {
   };
 
   useEffect(() => { loadActivity(); }, []);
+
+  const updateStaffStatus = async (member: ClinicalStaff, isActive: boolean) => {
+    try {
+      await updateDoc(doc(db, 'users', member.id), { isActive });
+      setStaff((current) => current.map((item) => item.id === member.id ? { ...item, isActive } : item));
+      setFeedback({ message: `${member.name} is now ${isActive ? 'active' : 'inactive'}.`, severity: 'success' });
+    } catch (error: any) {
+      setFeedback({ message: error?.response?.data?.message || error?.message || 'Unable to update staff status.', severity: 'error' });
+    }
+  };
 
   const updatePatientStatus = async (patient: IntakePatient, status: 'active' | 'inactive') => {
     const patientId = getPatientId(patient);
@@ -154,6 +190,57 @@ export const ReceptionDashboard: React.FC = () => {
 
   const filteredPatients = patients.filter((patient) => `${getPatientName(patient)} ${getPatientPhone(patient)}`.toLowerCase().includes(search.toLowerCase()));
   const totalCollected = payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const activeDoctors = staff.filter((member) => member.role.toLowerCase() === 'doctor' && member.isActive !== false).length;
+  const activeNurses = staff.filter((member) => ['nurse', 'head nurse'].includes(member.role.toLowerCase()) && member.isActive !== false).length;
+  const staffByRole = (role: 'doctor' | 'nurse') => staff.filter((member) => role === 'doctor'
+    ? member.role.toLowerCase() === 'doctor'
+    : ['nurse', 'head nurse'].includes(member.role.toLowerCase()));
+
+  const renderStaffWindow = (role: 'doctor' | 'nurse') => {
+    const searchValue = role === 'doctor' ? doctorSearch : nurseSearch;
+    const members = staffByRole(role).filter((member) =>
+      `${member.name} ${member.email} ${member.role}`.toLowerCase().includes(searchValue.toLowerCase())
+    );
+    const title = role === 'doctor' ? 'Doctors' : 'Nurses';
+    return (
+      <Paper sx={{ p: { xs: 2.5, md: 3 }, border: '1px solid #CFD8DC', boxShadow: 'none' }}>
+        <Typography variant="h6" fontWeight={700}>{title}</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Manage {title.toLowerCase()} availability.</Typography>
+        <TextField
+          fullWidth
+          size="small"
+          placeholder={`Search ${title.toLowerCase()} by name or email`}
+          value={searchValue}
+          onChange={(event) => role === 'doctor' ? setDoctorSearch(event.target.value) : setNurseSearch(event.target.value)}
+          InputProps={{ startAdornment: <InputAdornment position="start"><Search fontSize="small" /></InputAdornment> }}
+          sx={{ mb: 1.5 }}
+        />
+        {members.length === 0 ? (
+          <Typography color="text.secondary">{searchValue ? `No matching ${title.toLowerCase()} found.` : `No ${title.toLowerCase()} found.`}</Typography>
+        ) : (
+          <Box sx={{ maxHeight: 360, overflowY: 'auto', pr: 1 }}>
+            {members.map((member) => {
+              const isActive = member.isActive !== false;
+              return (
+                <Stack key={member.id} direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ py: 1.25, borderBottom: '1px solid #EEF2F5' }}>
+                  <Box>
+                    <Typography fontWeight={600}>{member.name}</Typography>
+                    <Typography variant="caption" color="text.secondary">{member.role} · {member.email}</Typography>
+                  </Box>
+                  <Stack direction="row" alignItems="center" spacing={1}>
+                    <Chip size="small" label={isActive ? 'Active' : 'Inactive'} color={isActive ? 'success' : 'default'} />
+                    <Button size="small" variant={isActive ? 'outlined' : 'contained'} color={isActive ? 'inherit' : 'success'} onClick={() => updateStaffStatus(member, !isActive)}>
+                      {isActive ? 'Make inactive' : 'Make active'}
+                    </Button>
+                  </Stack>
+                </Stack>
+              );
+            })}
+          </Box>
+        )}
+      </Paper>
+    );
+  };
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: '#F0F4F8' }}>
@@ -182,8 +269,10 @@ export const ReceptionDashboard: React.FC = () => {
             { label: 'Patients registered', value: patients.length, icon: <PersonAdd />, color: '#1565C0' },
             { label: 'Payments today', value: payments.length, icon: <ReceiptLong />, color: '#00838F' },
             { label: 'Collected today', value: `₹${totalCollected.toLocaleString('en-IN')}`, icon: <Payments />, color: '#059669' },
+            { label: 'Active doctors', value: activeDoctors, icon: <LocalHospital />, color: '#7C3AED' },
+            { label: 'Active nurses', value: activeNurses, icon: <LocalHospital />, color: '#DB2777' },
           ].map((stat) => (
-            <Grid item xs={12} sm={4} key={stat.label}>
+            <Grid item xs={12} sm={6} lg={2.4} key={stat.label}>
               <Paper sx={{ p: 2.25, border: '1px solid #CFD8DC', boxShadow: 'none', display: 'flex', alignItems: 'center', gap: 1.75 }}>
                 <Box sx={{ width: 44, height: 44, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: `${stat.color}12`, color: stat.color }}>{stat.icon}</Box>
                 <Box><Typography variant="caption" color="text.secondary">{stat.label}</Typography><Typography variant="h5" fontWeight={700} color="#1A2B4A">{stat.value}</Typography></Box>
@@ -192,7 +281,14 @@ export const ReceptionDashboard: React.FC = () => {
           ))}
         </Grid>
 
-        <Grid container spacing={3} alignItems="flex-start">
+        <Paper sx={{ mb: 3.5, border: '1px solid #CFD8DC', boxShadow: 'none' }}>
+          <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value)} variant="fullWidth">
+            <Tab label={`Patients (${patients.length})`} />
+            <Tab label={`Staff (${staff.length})`} />
+          </Tabs>
+        </Paper>
+
+        {activeTab === 0 && <Grid container spacing={3} alignItems="flex-start">
           <Grid item xs={12} lg={7}>
             <Paper component="form" onSubmit={handleSubmit} sx={{ p: { xs: 2.5, md: 3.5 }, border: '1px solid #CFD8DC', boxShadow: '0px 4px 18px rgba(21, 101, 192, 0.06)' }}>
               <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 3 }}>
@@ -233,7 +329,14 @@ export const ReceptionDashboard: React.FC = () => {
               <Chip icon={<CheckCircle />} label="Ready for collection" size="small" sx={{ mt: 2, bgcolor: '#fff', color: '#006064', fontWeight: 600 }} />
             </Paper>
           </Grid>
-        </Grid>
+        </Grid>}
+
+        {activeTab === 1 && (
+          <Grid container spacing={3} alignItems="flex-start">
+            <Grid item xs={12} lg={6}>{renderStaffWindow('doctor')}</Grid>
+            <Grid item xs={12} lg={6}>{renderStaffWindow('nurse')}</Grid>
+          </Grid>
+        )}
       </Container>
       <Snackbar open={Boolean(feedback)} autoHideDuration={5000} onClose={() => setFeedback(null)}><Alert severity={feedback?.severity} onClose={() => setFeedback(null)}>{feedback?.message}</Alert></Snackbar>
     </Box>
