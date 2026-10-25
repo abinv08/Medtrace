@@ -132,7 +132,11 @@ export const HeadNurseDashboard: React.FC = () => {
         getNurseDuties(),
       ]);
       const nurseUsers: Nurse[] = nurseProfiles
-        .filter((profile) => profile.isHeadNurse || ['nurse', 'head nurse'].includes((profile.role || '').toLowerCase()))
+        .filter((profile) => {
+          const isNurse = profile.isHeadNurse || ['nurse', 'head nurse'].includes((profile.role || '').toLowerCase());
+          const isActive = (profile as typeof profile & { isActive?: boolean }).isActive === true;
+          return isNurse && isActive;
+        })
         .map((profile) => ({ ...profile, id: profile.id, _id: profile.id }));
       const assignments = (assignmentsResponse.data?.assignments || []).map((assignment: any) => ({
         ...assignment,
@@ -319,7 +323,7 @@ export const HeadNurseDashboard: React.FC = () => {
         ) : (
           <Stack spacing={3}>
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 2 }}>
-              {[['Active', dutyStateCounts.active, colors.green], ['Scheduled', dutyStateCounts.scheduled, colors.amber], ['Off duty', Math.max(nurses.length - dutyStateCounts.active - dutyStateCounts.scheduled, 0), colors.muted], ['Pending approvals', tasks.length, colors.blue]].map(([label, value, color]) => <Paper key={String(label)} elevation={0} sx={{ p: 2, border: `1px solid ${colors.border}`, borderRadius: '12px' }}><Typography variant="caption" sx={{ color: colors.muted }}>{label}</Typography><Typography variant="h4" sx={{ color, fontWeight: 850 }}>{value}</Typography></Paper>)}
+              {[['Active', dutyStateCounts.active, colors.green], ['Scheduled', dutyStateCounts.scheduled, colors.amber], ['On duty', Math.max(nurses.length - dutyStateCounts.active - dutyStateCounts.scheduled, 0), colors.muted], ['Pending approvals', tasks.length, colors.blue]].map(([label, value, color]) => <Paper key={String(label)} elevation={0} sx={{ p: 2, border: `1px solid ${colors.border}`, borderRadius: '12px' }}><Typography variant="caption" sx={{ color: colors.muted }}>{label}</Typography><Typography variant="h4" sx={{ color, fontWeight: 850 }}>{value}</Typography></Paper>)}
             </Box>
             <Paper component="form" onSubmit={handleScheduleDuty} elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${colors.border}`, borderRadius: '14px' }}>
               <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}><Schedule sx={{ color: colors.teal }} /><Typography variant="h6" sx={{ color: colors.navy, fontWeight: 800 }}>Duty planner</Typography></Stack>
@@ -368,7 +372,23 @@ export const HeadNurseDashboard: React.FC = () => {
                 <Chip size="small" label={`${patients.length} patients`} sx={{ ml: 'auto', color: colors.muted, backgroundColor: '#F1F5F9', fontWeight: 700 }} />
               </Stack>
               <Divider sx={{ mb: 2 }} />
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' }, gap: 2 }}>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', xl: 'repeat(2, 1fr)' },
+                  gap: 2,
+                  height: { xs: 640, xl: 560 },
+                  overflowY: 'auto',
+                  pr: 1,
+                  alignContent: 'start',
+                  '&::-webkit-scrollbar': { width: 8 },
+                  '&::-webkit-scrollbar-thumb': {
+                    backgroundColor: colors.border,
+                    borderRadius: 4,
+                  },
+                }}
+                aria-label="Patient live data"
+              >
                 {patients.map((patient) => {
                   const latest = patient.latestVitals;
                   const form = vitals[idOf(patient)] || {};
@@ -393,19 +413,33 @@ export const HeadNurseDashboard: React.FC = () => {
                   <Chip size="small" label={`${nurses.length} nurses`} sx={{ ml: 'auto', color: colors.teal, backgroundColor: '#E6FFFB', fontWeight: 700 }} />
                 </Stack>
                 <Divider sx={{ mb: 1 }} />
-                {nurses.length === 0 ? <Typography sx={{ color: colors.muted, py: 3 }}>No nurses were returned.</Typography> : nurses.map((nurse) => (
-                  <Box key={idOf(nurse)} sx={{ py: 2, display: 'flex', gap: 2, justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <Box>
-                      <Typography sx={{ color: colors.navy, fontWeight: 800 }}>{nurse.name || 'Nurse'}</Typography>
-                      <Typography variant="body2" sx={{ color: colors.muted }}>{nurse.email || nurse.department || 'Clinical team'}</Typography>
+                <Box
+                  sx={{
+                    height: { xs: 500, sm: 380 },
+                    overflowY: 'auto',
+                    pr: 1,
+                    '&::-webkit-scrollbar': { width: 8 },
+                    '&::-webkit-scrollbar-thumb': {
+                      backgroundColor: colors.border,
+                      borderRadius: 4,
+                    },
+                  }}
+                  aria-label="Nurse coverage"
+                >
+                  {nurses.length === 0 ? <Typography sx={{ color: colors.muted, py: 3 }}>No nurses were returned.</Typography> : nurses.map((nurse) => (
+                    <Box key={idOf(nurse)} sx={{ py: 2, display: 'flex', gap: 2, justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <Box>
+                        <Typography sx={{ color: colors.navy, fontWeight: 800 }}>{nurse.name || 'Nurse'}</Typography>
+                        <Typography variant="body2" sx={{ color: colors.muted }}>{nurse.email || nurse.department || 'Clinical team'}</Typography>
+                      </Box>
+                      <Box sx={{ textAlign: 'right' }}>
+                        <Typography sx={{ color: colors.blue, fontWeight: 800 }}>{nurse.patients.length}</Typography>
+                        <Typography variant="caption" sx={{ color: colors.muted }}>assigned patients</Typography>
+                        {nurse.patients.length > 0 && <Typography variant="caption" display="block" sx={{ color: colors.muted, mt: 0.5 }}>{nurse.patients.map(patientName).join(', ')}</Typography>}
+                      </Box>
                     </Box>
-                    <Box sx={{ textAlign: 'right' }}>
-                      <Typography sx={{ color: colors.blue, fontWeight: 800 }}>{nurse.patients.length}</Typography>
-                      <Typography variant="caption" sx={{ color: colors.muted }}>assigned patients</Typography>
-                      {nurse.patients.length > 0 && <Typography variant="caption" display="block" sx={{ color: colors.muted, mt: 0.5 }}>{nurse.patients.map(patientName).join(', ')}</Typography>}
-                    </Box>
-                  </Box>
-                ))}
+                  ))}
+                </Box>
               </Paper>
 
               <Paper component="form" onSubmit={handleCreateTask} elevation={0} sx={{ p: { xs: 2.5, md: 3 }, border: `1px solid ${colors.border}`, borderRadius: '14px' }}>

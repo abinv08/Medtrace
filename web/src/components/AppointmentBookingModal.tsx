@@ -107,14 +107,21 @@ export const AppointmentBookingModal: React.FC<AppointmentBookingModalProps> = (
       setLoadingDocs(true);
       fetchAllDoctors('approved')
         .then((list) => {
-          if (list.length > 0) {
-            setDoctors(list);
-            setSelectedDoctorId(list[0].id);
+          const approvedDoctors = list.filter((doctor) => (
+            (doctor.role || '').trim().toLowerCase() === 'doctor'
+          ));
+          if (approvedDoctors.length > 0) {
+            setDoctors(approvedDoctors);
+            setSelectedDoctorId(approvedDoctors[0].id);
           } else {
             setDoctors(DEFAULT_DOCTOR_LIST);
+            setSelectedDoctorId(DEFAULT_DOCTOR_LIST[0].id || '');
           }
         })
-        .catch(() => setDoctors(DEFAULT_DOCTOR_LIST))
+        .catch(() => {
+          setDoctors(DEFAULT_DOCTOR_LIST);
+          setSelectedDoctorId(DEFAULT_DOCTOR_LIST[0].id || '');
+        })
         .finally(() => setLoadingDocs(false));
     }
   }, [open]);
