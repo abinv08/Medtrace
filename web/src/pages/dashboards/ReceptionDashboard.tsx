@@ -27,7 +27,7 @@ interface IntakePatient {
   visitReason?: string;
   createdAt?: string;
   status?: 'active' | 'inactive';
-  userId?: { name?: string; phone?: string; email?: string; patientId?: string } | string;
+  userId?: { _id?: string; name?: string; phone?: string; email?: string; patientId?: string } | string;
 }
 
 interface PaymentRecord {
@@ -72,6 +72,33 @@ export const ReceptionDashboard: React.FC = () => {
   const getPatientDisplayId = (patient: IntakePatient) => patient.patientId || (typeof patient.userId === 'object' ? patient.userId.patientId : undefined) || getPatientId(patient);
   const getPatientPhone = (patient: IntakePatient) => patient.phone || (typeof patient.userId === 'object' ? patient.userId.phone || '' : '');
   const getPatientName = (patient: IntakePatient) => patient.name || (typeof patient.userId === 'object' ? patient.userId.name || 'Patient' : 'Patient');
+  const getPatientEmail = (patient: IntakePatient) => typeof patient.userId === 'object' ? patient.userId.email || '' : '';
+  const getPatientUserId = (patient: IntakePatient) => typeof patient.userId === 'string'
+    ? patient.userId
+    : undefined;
+
+  const syncPatientCareStatus = async (patient: IntakePatient, careStatus: 'active' | 'at_home') => {
+    let userId = getPatientUserId(patient);
+    if (!userId) {
+      const email = getPatientEmail(patient);
+      if (email) {
+        const userSnapshot = await getDocs(query(collection(db, 'users'), where('email', '==', email)));
+        userId = userSnapshot.docs[0]?.id;
+      }
+    }
+    if (!userId) {
+      throw new Error('The patient account could not be found to update care status.');
+    }
+
+    const now = new Date().toISOString();
+    await updateDoc(doc(db, 'users', userId), {
+      careStatus,
+      ...(careStatus === 'active'
+        ? { admittedAt: now, dischargedAt: null, dischargedBy: null }
+        : { dischargedAt: now, dischargedBy: user?.name || 'Reception' }),
+      updatedAt: now,
+    });
+  };
 
   const loadActivity = async () => {
     setLoading(true);
@@ -125,6 +152,7 @@ export const ReceptionDashboard: React.FC = () => {
     if (!patientId) return;
     try {
       await api.put(`/api/patients/${patientId}/status`, { status });
+      await syncPatientCareStatus(patient, status === 'active' ? 'active' : 'at_home');
       setPatients((current) => current.map((item) => getPatientId(item) === patientId ? { ...item, status } : item));
       setFeedback({ message: `${getPatientName(patient)} is now ${status}.`, severity: 'success' });
     } catch (error: any) {
@@ -154,6 +182,7 @@ export const ReceptionDashboard: React.FC = () => {
         const patientId = getPatientId(existingPatient);
         if (!patientId) throw new Error('The existing patient record has no valid ID.');
         await api.put(`/api/patients/${patientId}/status`, { status: 'active' });
+        await syncPatientCareStatus(existingPatient, 'active');
         patient = { ...existingPatient, status: 'active' };
       } else {
         const patientResponse = await api.post('/api/patients', {
@@ -184,6 +213,8 @@ export const ReceptionDashboard: React.FC = () => {
           role: 'Patient',
           patientId: patient?.patientId || patient?.id || patient?._id || credential.user.uid,
           status: 'approved',
+          careStatus: 'active',
+          admittedAt: createdAt,
           isActive: true,
           createdBy: user?.id || 'reception',
           createdAt,
