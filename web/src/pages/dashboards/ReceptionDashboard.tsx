@@ -8,11 +8,12 @@ import {
   Add, CalendarMonth, CheckCircle, CreditCard, LocalHospital, Payments,
   PersonAdd, Phone, ReceiptLong, Search,
 } from '@mui/icons-material';
-import { collection, doc, getDocs, query, updateDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, sendPasswordResetEmail, updateProfile } from 'firebase/auth';
 import { useAuth } from '../../contexts/AuthContext';
 import { MedTraceLogo } from '../../components/Logo';
 import api from '../../services/api';
-import { db } from '../../config/firebase';
+import { db, patientProvisioningAuth } from '../../config/firebase';
 
 interface IntakePatient {
   id?: string;
@@ -47,7 +48,7 @@ interface ClinicalStaff {
 }
 
 const initialForm = {
-  name: '', phone: '', dateOfBirth: '', gender: '', bloodGroup: '', visitReason: '',
+  name: '', email: '', phone: '', dateOfBirth: '', gender: '', bloodGroup: '', visitReason: '',
   amount: '', paymentMethod: 'Cash',
 };
 
@@ -137,8 +138,8 @@ export const ReceptionDashboard: React.FC = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!form.name.trim() || !form.phone.trim() || !form.amount) {
-      setFeedback({ message: 'Name, phone number, and payment amount are required.', severity: 'error' });
+    if (!form.name.trim() || !form.email.trim() || !form.phone.trim() || !form.amount) {
+      setFeedback({ message: 'Name, email, phone number, and payment amount are required.', severity: 'error' });
       return;
     }
 
@@ -157,6 +158,7 @@ export const ReceptionDashboard: React.FC = () => {
       } else {
         const patientResponse = await api.post('/api/patients', {
           name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
           phone: form.phone.trim(),
           dateOfBirth: form.dateOfBirth,
           gender: form.gender,
@@ -167,6 +169,27 @@ export const ReceptionDashboard: React.FC = () => {
           createdAt,
         });
         patient = patientResponse.data?.patients || patientResponse.data?.patient || {};
+
+        const temporaryPassword = `${crypto.randomUUID()}Aa1!`;
+        const credential = await createUserWithEmailAndPassword(
+          patientProvisioningAuth,
+          form.email.trim().toLowerCase(),
+          temporaryPassword
+        );
+        await updateProfile(credential.user, { displayName: form.name.trim() });
+        await setDoc(doc(db, 'users', credential.user.uid), {
+          name: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
+          phone: form.phone.trim(),
+          role: 'Patient',
+          patientId: patient?.patientId || patient?.id || patient?._id || credential.user.uid,
+          status: 'approved',
+          isActive: true,
+          createdBy: user?.id || 'reception',
+          createdAt,
+          updatedAt: createdAt,
+        });
+        await sendPasswordResetEmail(patientProvisioningAuth, form.email.trim().toLowerCase());
       }
 
       await api.post('/api/payments', {
@@ -299,6 +322,7 @@ export const ReceptionDashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mb: 1.5, color: '#546E7A' }}>PATIENT DETAILS</Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}><TextField fullWidth required label="Full name" value={form.name} onChange={updateField('name')} /></Grid>
+                <Grid item xs={12} sm={6}><TextField fullWidth required type="email" label="Email address" value={form.email} onChange={updateField('email')} /></Grid>
                 <Grid item xs={12} sm={6}><TextField fullWidth required label="Phone number" value={form.phone} onChange={updateField('phone')} InputProps={{ startAdornment: <InputAdornment position="start"><Phone fontSize="small" /></InputAdornment> }} /></Grid>
                 <Grid item xs={12} sm={4}><TextField fullWidth type="date" label="Date of birth" value={form.dateOfBirth} onChange={updateField('dateOfBirth')} InputLabelProps={{ shrink: true }} InputProps={{ startAdornment: <InputAdornment position="start"><CalendarMonth fontSize="small" /></InputAdornment> }} /></Grid>
                 <Grid item xs={12} sm={4}><TextField fullWidth select label="Gender" value={form.gender} onChange={updateField('gender')}><MenuItem value="Female">Female</MenuItem><MenuItem value="Male">Male</MenuItem><MenuItem value="Other">Other</MenuItem><MenuItem value="Prefer not to say">Prefer not to say</MenuItem></TextField></Grid>

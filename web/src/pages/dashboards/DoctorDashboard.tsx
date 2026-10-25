@@ -573,7 +573,22 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
             <Typography variant="caption" sx={{ color: C.muted, fontWeight: 700, display: 'block', mb: 1.5 }}>
               SEARCH RESULTS ({searchResults.length})
             </Typography>
-            <Box display="flex" flexDirection="column" gap={1}>
+            <Box
+              display="flex"
+              flexDirection="column"
+              gap={1}
+              sx={{
+                maxHeight: { xs: 500, sm: 380 },
+                overflowY: 'auto',
+                pr: 1,
+                '&::-webkit-scrollbar': { width: 8 },
+                '&::-webkit-scrollbar-thumb': {
+                  backgroundColor: C.border,
+                  borderRadius: 4,
+                },
+              }}
+              aria-label="Patient search results"
+            >
               {searchResults.map((p: PatientSearchResult) => {
                 const qv = patientVitalsMap[p.uid] || patientVitalsMap[(p as any).patientDocId];
                 return (
@@ -824,7 +839,22 @@ const DoctorDashboardInner: React.FC<any> = (props) => {
                 ) : allPatients.length === 0 ? (
                   <Alert severity="info" sx={{ borderRadius: '12px' }}>No patients registered yet.</Alert>
                 ) : (
-                  <Box display="flex" flexDirection="column" gap={1.5}>
+                  <Box
+                    display="flex"
+                    flexDirection="column"
+                    gap={1.5}
+                    sx={{
+                      height: { xs: 500, sm: 380 },
+                      overflowY: 'auto',
+                      pr: 1,
+                      '&::-webkit-scrollbar': { width: 8 },
+                      '&::-webkit-scrollbar-thumb': {
+                        backgroundColor: C.border,
+                        borderRadius: 4,
+                      },
+                    }}
+                    aria-label="Active patient records"
+                  >
                     {[...allPatients].sort((a, b) => {
                       if (needsAttentionFirst) {
                         const difference = Number(hasVitalsAnomaly(patientVitalsMap[b.uid] || patientVitalsMap[(b as any).patientDocId])) - Number(hasVitalsAnomaly(patientVitalsMap[a.uid] || patientVitalsMap[(a as any).patientDocId]));
