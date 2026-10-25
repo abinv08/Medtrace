@@ -294,6 +294,10 @@ export const PatientDashboard: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  const refreshDashboard = async () => {
+    await Promise.all([loadData(), refreshUser()]);
+  };
+
   // ── Log Medication Dose Taken Action ───────────────────────────────────────
   const handleTakeMedication = async (medId: string) => {
     setActionLoading(medId);
@@ -441,7 +445,7 @@ export const PatientDashboard: React.FC = () => {
                 <Tooltip title="Refresh Clinical Data">
                   <IconButton
                     size="small"
-                    onClick={loadData}
+                    onClick={refreshDashboard}
                     disabled={loading}
                     sx={{ color: 'rgba(255,255,255,0.9)', ml: 0.5 }}
                   >

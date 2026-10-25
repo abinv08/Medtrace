@@ -20,6 +20,7 @@ interface IntakePatient {
   _id?: string;
   patientId?: string;
   name: string;
+  email?: string;
   phone: string;
   dateOfBirth?: string;
   gender?: string;
@@ -27,7 +28,7 @@ interface IntakePatient {
   visitReason?: string;
   createdAt?: string;
   status?: 'active' | 'inactive';
-  userId?: { _id?: string; name?: string; phone?: string; email?: string; patientId?: string } | string;
+  userId?: { name?: string; phone?: string; email?: string; patientId?: string } | string;
 }
 
 interface PaymentRecord {
@@ -72,7 +73,8 @@ export const ReceptionDashboard: React.FC = () => {
   const getPatientDisplayId = (patient: IntakePatient) => patient.patientId || (typeof patient.userId === 'object' ? patient.userId.patientId : undefined) || getPatientId(patient);
   const getPatientPhone = (patient: IntakePatient) => patient.phone || (typeof patient.userId === 'object' ? patient.userId.phone || '' : '');
   const getPatientName = (patient: IntakePatient) => patient.name || (typeof patient.userId === 'object' ? patient.userId.name || 'Patient' : 'Patient');
-  const getPatientEmail = (patient: IntakePatient) => typeof patient.userId === 'object' ? patient.userId.email || '' : '';
+  const getPatientEmail = (patient: IntakePatient) => patient.email
+    || (typeof patient.userId === 'object' ? patient.userId.email || '' : '');
   const getPatientUserId = (patient: IntakePatient) => typeof patient.userId === 'string'
     ? patient.userId
     : undefined;
@@ -102,13 +104,30 @@ export const ReceptionDashboard: React.FC = () => {
 
   const loadActivity = async () => {
     setLoading(true);
-    const [patientResult, paymentResult, staffResult] = await Promise.allSettled([
+    const [patientResult, paymentResult, staffResult, firestorePatientsResult] = await Promise.allSettled([
       api.get('/api/patients'),
       api.get('/api/payments'),
       getDocs(query(collection(db, 'users'), where('role', 'in', ['Doctor', 'Nurse', 'Head Nurse']))),
+      getDocs(query(collection(db, 'users'), where('role', '==', 'Patient'))),
     ]);
 
-    if (patientResult.status === 'fulfilled') {
+    if (firestorePatientsResult.status === 'fulfilled') {
+      setPatients(firestorePatientsResult.value.docs.map((patientDoc) => {
+        const data = patientDoc.data();
+        return {
+          id: patientDoc.id,
+          patientId: data.patientId || patientDoc.id,
+          name: data.name || 'Patient',
+          email: data.email || '',
+          phone: data.phone || '',
+          dateOfBirth: data.dateOfBirth,
+          gender: data.gender,
+          bloodGroup: data.bloodGroup,
+          createdAt: data.createdAt,
+          status: data.careStatus === 'active' ? 'active' : 'inactive',
+        };
+      }));
+    } else if (patientResult.status === 'fulfilled') {
       setPatients(patientResult.value.data?.patients || []);
     }
     if (paymentResult.status === 'fulfilled') {
@@ -125,10 +144,10 @@ export const ReceptionDashboard: React.FC = () => {
 
     if (staffResult.status === 'rejected') {
       setFeedback({ message: 'Patients and payments loaded, but clinical staff status is unavailable.', severity: 'error' });
-    } else if (patientResult.status === 'rejected' && paymentResult.status === 'rejected') {
+    } else if (firestorePatientsResult.status === 'rejected' && patientResult.status === 'rejected' && paymentResult.status === 'rejected') {
       setFeedback({ message: 'Unable to load patients or payments. Please check your connection and sign in again.', severity: 'error' });
-    } else if (patientResult.status === 'rejected') {
-      setFeedback({ message: 'Unable to load registered patients. Please check your connection and sign in again.', severity: 'error' });
+    } else if (firestorePatientsResult.status === 'rejected' && patientResult.status === 'rejected') {
+      setFeedback({ message: 'Unable to load registered patients from Firebase. Please check your connection and sign in again.', severity: 'error' });
     } else if (paymentResult.status === 'rejected') {
       setFeedback({ message: 'Patients loaded, but payment history is unavailable.', severity: 'error' });
     }
@@ -151,7 +170,6 @@ export const ReceptionDashboard: React.FC = () => {
     const patientId = getPatientId(patient);
     if (!patientId) return;
     try {
-      await api.put(`/api/patients/${patientId}/status`, { status });
       await syncPatientCareStatus(patient, status === 'active' ? 'active' : 'at_home');
       setPatients((current) => current.map((item) => getPatientId(item) === patientId ? { ...item, status } : item));
       setFeedback({ message: `${getPatientName(patient)} is now ${status}.`, severity: 'success' });
@@ -181,7 +199,6 @@ export const ReceptionDashboard: React.FC = () => {
       if (existingPatient) {
         const patientId = getPatientId(existingPatient);
         if (!patientId) throw new Error('The existing patient record has no valid ID.');
-        await api.put(`/api/patients/${patientId}/status`, { status: 'active' });
         await syncPatientCareStatus(existingPatient, 'active');
         patient = { ...existingPatient, status: 'active' };
       } else {
