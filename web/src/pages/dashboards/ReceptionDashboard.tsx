@@ -55,6 +55,15 @@ const initialForm = {
   amount: '', paymentMethod: 'Cash',
 };
 
+const todayIsoDate = () => {
+  const today = new Date();
+  const offset = today.getTimezoneOffset();
+  return new Date(today.getTime() - offset * 60 * 1000).toISOString().slice(0, 10);
+};
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phonePattern = /^\+?[1-9][\d\s-]{7,14}$/;
+
 const formatTime = (value?: string) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now';
 
 export const ReceptionDashboard: React.FC = () => {
@@ -188,6 +197,18 @@ export const ReceptionDashboard: React.FC = () => {
     event.preventDefault();
     if (!form.name.trim() || !form.email.trim() || !form.phone.trim() || !form.amount) {
       setFeedback({ message: 'Name, email, phone number, and payment amount are required.', severity: 'error' });
+      return;
+    }
+    if (!emailPattern.test(form.email.trim())) {
+      setFeedback({ message: 'Enter a valid email address.', severity: 'error' });
+      return;
+    }
+    if (!phonePattern.test(form.phone.trim())) {
+      setFeedback({ message: 'Enter a valid phone number with 8 to 15 digits.', severity: 'error' });
+      return;
+    }
+    if (form.dateOfBirth && form.dateOfBirth > todayIsoDate()) {
+      setFeedback({ message: 'Date of birth cannot be after today.', severity: 'error' });
       return;
     }
 
@@ -383,9 +404,9 @@ export const ReceptionDashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mb: 1.5, color: '#546E7A' }}>PATIENT DETAILS</Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}><TextField fullWidth required label="Full name" value={form.name} onChange={updateField('name')} /></Grid>
-                <Grid item xs={12} sm={6}><TextField fullWidth required type="email" label="Email address" value={form.email} onChange={updateField('email')} /></Grid>
-                <Grid item xs={12} sm={6}><TextField fullWidth required label="Phone number" value={form.phone} onChange={updateField('phone')} InputProps={{ startAdornment: <InputAdornment position="start"><Phone fontSize="small" /></InputAdornment> }} /></Grid>
-                <Grid item xs={12} sm={4}><TextField fullWidth type="date" label="Date of birth" value={form.dateOfBirth} onChange={updateField('dateOfBirth')} InputLabelProps={{ shrink: true }} InputProps={{ startAdornment: <InputAdornment position="start"><CalendarMonth fontSize="small" /></InputAdornment> }} /></Grid>
+                <Grid item xs={12} sm={6}><TextField fullWidth required type="email" label="Email address" value={form.email} onChange={updateField('email')} error={Boolean(form.email) && !emailPattern.test(form.email.trim())} helperText={form.email && !emailPattern.test(form.email.trim()) ? 'Enter a valid email address.' : undefined} /></Grid>
+                <Grid item xs={12} sm={6}><TextField fullWidth required label="Phone number" value={form.phone} onChange={updateField('phone')} error={Boolean(form.phone) && !phonePattern.test(form.phone.trim())} helperText={form.phone && !phonePattern.test(form.phone.trim()) ? 'Use 8 to 15 digits, with an optional country code.' : undefined} InputProps={{ startAdornment: <InputAdornment position="start"><Phone fontSize="small" /></InputAdornment> }} /></Grid>
+                <Grid item xs={12} sm={4}><TextField fullWidth type="date" label="Date of birth" value={form.dateOfBirth} onChange={updateField('dateOfBirth')} inputProps={{ max: todayIsoDate() }} error={Boolean(form.dateOfBirth) && form.dateOfBirth > todayIsoDate()} helperText={form.dateOfBirth && form.dateOfBirth > todayIsoDate() ? 'Date of birth cannot be after today.' : undefined} InputLabelProps={{ shrink: true }} InputProps={{ startAdornment: <InputAdornment position="start"><CalendarMonth fontSize="small" /></InputAdornment> }} /></Grid>
                 <Grid item xs={12} sm={4}><TextField fullWidth select label="Gender" value={form.gender} onChange={updateField('gender')}><MenuItem value="Female">Female</MenuItem><MenuItem value="Male">Male</MenuItem><MenuItem value="Other">Other</MenuItem><MenuItem value="Prefer not to say">Prefer not to say</MenuItem></TextField></Grid>
                 <Grid item xs={12} sm={4}><TextField fullWidth select label="Blood group" value={form.bloodGroup} onChange={updateField('bloodGroup')}><MenuItem value="A+">A+</MenuItem><MenuItem value="A-">A-</MenuItem><MenuItem value="B+">B+</MenuItem><MenuItem value="B-">B-</MenuItem><MenuItem value="AB+">AB+</MenuItem><MenuItem value="AB-">AB-</MenuItem><MenuItem value="O+">O+</MenuItem><MenuItem value="O-">O-</MenuItem></TextField></Grid>
                 <Grid item xs={12}><TextField fullWidth label="Visit reason" placeholder="e.g. General consultation" value={form.visitReason} onChange={updateField('visitReason')} /></Grid>

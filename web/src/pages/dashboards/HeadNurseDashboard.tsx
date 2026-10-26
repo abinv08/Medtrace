@@ -76,6 +76,31 @@ type NurseTask = {
 
 const idOf = (value: { _id?: string; id?: string } | undefined) => value?._id || value?.id || '';
 
+const todayIsoDate = () => {
+  const today = new Date();
+  const offset = today.getTimezoneOffset();
+  return new Date(today.getTime() - offset * 60 * 1000).toISOString().slice(0, 10);
+};
+
+const localDateTimeValue = (date: Date) => {
+  const offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60 * 1000).toISOString().slice(0, 16);
+};
+
+const datePart = (dateTime: string) => dateTime.slice(0, 10);
+const timePart = (dateTime: string) => dateTime.slice(11, 16);
+
+const initialDutyDateTime = () => {
+  const start = new Date();
+  start.setMinutes(start.getMinutes() + 1);
+  const end = new Date(start);
+  end.setHours(end.getHours() + 8);
+  return {
+    startDateTime: localDateTimeValue(start),
+    endDateTime: localDateTimeValue(end),
+  };
+};
+
 const patientName = (patient?: Patient) => {
   if (!patient) return 'Patient';
   if (patient.name) return patient.name;
@@ -111,7 +136,8 @@ export const HeadNurseDashboard: React.FC = () => {
   const [vitals, setVitals] = useState<Record<string, Record<string, string>>>({});
   const [taskDescription, setTaskDescription] = useState('');
   const [dueAt, setDueAt] = useState('');
-  const [dutyForm, setDutyForm] = useState<{ nurseId: string; wardName: string; dutyDate: string; shift: NonNullable<NurseDuty['shift']>; startTime: string; endTime: string; notes: string }>({ nurseId: '', wardName: '', dutyDate: '', shift: 'morning', startTime: '07:00', endTime: '15:00', notes: '' });
+  const [dutyDateTime] = useState(initialDutyDateTime);
+  const [dutyForm, setDutyForm] = useState<{ nurseId: string; wardName: string; dutyDate: string; shift: NonNullable<NurseDuty['shift']>; startDateTime: string; endDateTime: string; notes: string }>({ nurseId: '', wardName: '', dutyDate: '', shift: 'morning', ...dutyDateTime, notes: '' });
 
   const authHeaders = useCallback(async () => {
     let activeToken = token;
@@ -186,10 +212,35 @@ export const HeadNurseDashboard: React.FC = () => {
   const handleScheduleDuty = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!dutyForm.nurseId || !dutyForm.dutyDate || !user?.id) return;
+    const now = new Date();
+    const start = new Date(dutyForm.startDateTime);
+    const end = new Date(dutyForm.endDateTime);
+    if (dutyForm.dutyDate < todayIsoDate() || datePart(dutyForm.startDateTime) !== dutyForm.dutyDate) {
+      setError('Duty date must be today or a future date and match the start timestamp.');
+      return;
+    }
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start < now) {
+      setError('Start time must be now or later.');
+      return;
+    }
+    if (end <= start) {
+      setError('End time must be after the start time.');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
-      await createNurseDuty({ ...dutyForm, assignedBy: user.id, wardId: null });
+      await createNurseDuty({
+        nurseId: dutyForm.nurseId,
+        wardName: dutyForm.wardName,
+        dutyDate: datePart(dutyForm.startDateTime),
+        shift: dutyForm.shift,
+        startTime: timePart(dutyForm.startDateTime),
+        endTime: timePart(dutyForm.endDateTime),
+        notes: dutyForm.notes,
+        assignedBy: user.id,
+        wardId: null,
+      });
       setFeedback('Duty scheduled successfully.');
       setDutyForm((current) => ({ ...current, nurseId: '', wardName: '', dutyDate: '', notes: '' }));
       await loadData();
@@ -330,10 +381,10 @@ export const HeadNurseDashboard: React.FC = () => {
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' }, gap: 2 }}>
                 <FormControl size="small" required><InputLabel>Nurse</InputLabel><Select value={dutyForm.nurseId} label="Nurse" onChange={(event) => setDutyForm((current) => ({ ...current, nurseId: event.target.value }))}>{nurses.map((nurse) => <MenuItem key={idOf(nurse)} value={idOf(nurse)}>{nurse.name || nurse.email || 'Nurse'}</MenuItem>)}</Select></FormControl>
                 <TextField size="small" label="Ward" value={dutyForm.wardName} onChange={(event) => setDutyForm((current) => ({ ...current, wardName: event.target.value }))} required />
-                <TextField size="small" label="Duty date" type="date" value={dutyForm.dutyDate} onChange={(event) => setDutyForm((current) => ({ ...current, dutyDate: event.target.value }))} InputLabelProps={{ shrink: true }} required />
+                <TextField size="small" label="Duty date" type="date" value={dutyForm.dutyDate} onChange={(event) => setDutyForm((current) => ({ ...current, dutyDate: event.target.value, startDateTime: current.startDateTime ? `${event.target.value}T${timePart(current.startDateTime)}` : current.startDateTime, endDateTime: current.endDateTime ? `${event.target.value}T${timePart(current.endDateTime)}` : current.endDateTime }))} inputProps={{ min: todayIsoDate() }} InputLabelProps={{ shrink: true }} required />
                 <FormControl size="small"><InputLabel>Shift</InputLabel><Select value={dutyForm.shift} label="Shift" onChange={(event) => setDutyForm((current) => ({ ...current, shift: event.target.value as NonNullable<NurseDuty['shift']> }))}><MenuItem value="morning">Morning</MenuItem><MenuItem value="evening">Evening</MenuItem><MenuItem value="night">Night</MenuItem><MenuItem value="custom">Custom</MenuItem></Select></FormControl>
-                <TextField size="small" label="Start" type="time" value={dutyForm.startTime} onChange={(event) => setDutyForm((current) => ({ ...current, startTime: event.target.value }))} InputLabelProps={{ shrink: true }} required />
-                <TextField size="small" label="End" type="time" value={dutyForm.endTime} onChange={(event) => setDutyForm((current) => ({ ...current, endTime: event.target.value }))} InputLabelProps={{ shrink: true }} required />
+                <TextField size="small" label="Start timestamp" type="datetime-local" value={dutyForm.startDateTime} onChange={(event) => setDutyForm((current) => ({ ...current, startDateTime: event.target.value, dutyDate: datePart(event.target.value) }))} inputProps={{ min: localDateTimeValue(new Date()) }} InputLabelProps={{ shrink: true }} required />
+                <TextField size="small" label="End timestamp" type="datetime-local" value={dutyForm.endDateTime} onChange={(event) => setDutyForm((current) => ({ ...current, endDateTime: event.target.value }))} inputProps={{ min: dutyForm.startDateTime || localDateTimeValue(new Date()) }} InputLabelProps={{ shrink: true }} required />
                 <TextField size="small" label="Notes" value={dutyForm.notes} onChange={(event) => setDutyForm((current) => ({ ...current, notes: event.target.value }))} />
                 <Button type="submit" variant="contained" disabled={submitting} sx={{ backgroundColor: colors.teal, borderRadius: '8px' }}>Schedule duty</Button>
               </Box>
