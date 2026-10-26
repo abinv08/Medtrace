@@ -1,5 +1,6 @@
 import api from './api';
 import { createNotification } from './notificationService';
+import emailjs from '@emailjs/browser';
 
 export interface CaretakerLink {
   id: string; // The assignment _id
@@ -15,6 +16,8 @@ export interface CaretakerLink {
   accessLevel: 'Full Access (Vitals, Meds, Appointments)' | 'View Only' | 'Emergency Alerts Only' | string;
   status: 'active' | 'pending' | 'revoked' | string;
   assignedAt: string;
+  emailSent?: boolean;
+  emailError?: string;
 }
 
 export interface AssignCaretakerPayload {
@@ -28,6 +31,52 @@ export interface AssignCaretakerPayload {
   relationship: string;
   accessLevel: string;
 }
+
+const sendCaretakerAssignmentEmail = async (
+  payload: AssignCaretakerPayload
+): Promise<{ sent: boolean; error?: string }> => {
+  const serviceId = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+  const templateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+  const publicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+  if (!serviceId || !templateId || !publicKey) {
+    return {
+      sent: false,
+      error: 'EmailJS configuration is missing. Check the VITE_EMAILJS_* values and restart the web app.',
+    };
+  }
+
+  const caretakerName = payload.caretakerName.trim();
+  const caretakerEmail = payload.caretakerEmail.trim().toLowerCase();
+  const patientName = payload.patientName || 'your assigned patient';
+  const relationship = payload.relationship || 'Caretaker';
+  const accessLevel = payload.accessLevel || 'Assigned patient care access';
+  const registerUrl = `${window.location.origin}/register`;
+
+  try {
+    await emailjs.send(
+      import.meta.env.VITE_EMAILJS_SERVICE_ID,
+      import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+      {
+        to_email: caretakerEmail,
+        caretaker_name: caretakerName,
+        patient_name: patientName,
+        relationship,
+        access_level: accessLevel,
+        register_url: registerUrl,
+        subject: `MedTrace Care Network Access for ${patientName}`,
+      },
+      import.meta.env.VITE_EMAILJS_PUBLIC_KEY
+    );
+    return { sent: true };
+  } catch (error) {
+    console.error('Failed to send caretaker assignment email through EmailJS:', error);
+    const emailError = error as { status?: number; text?: string; message?: string };
+    return {
+      sent: false,
+      error: `EmailJS error${emailError.status ? ` ${emailError.status}` : ''}: ${emailError.text || emailError.message || 'Unknown email delivery error'}`,
+    };
+  }
+};
 
 /**
  * Normalizes backend assignment document into CaretakerLink interface
@@ -180,7 +229,10 @@ export const assignCaretaker = async (
     caretakerName: payload.caretakerName.trim(),
     caretakerPhone: payload.caretakerPhone?.trim(),
     patientId: payload.patientId,
+    patientName: payload.patientName,
+    patientPatientId: payload.patientPatientId,
     relationship: payload.relationship,
+    accessLevel: payload.accessLevel,
     permissions,
     status: 'active',
   });
@@ -201,6 +253,9 @@ export const assignCaretaker = async (
         status: 'active',
         assignedAt: new Date().toISOString(),
       };
+  const emailResult = await sendCaretakerAssignmentEmail(payload);
+  newLink.emailSent = emailResult.sent;
+  newLink.emailError = emailResult.error;
 
   try {
     await createNotification({

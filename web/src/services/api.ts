@@ -213,7 +213,13 @@ const post = async <T = any>(url: string, body: any = {}, _config: RequestConfig
     return success({ duty: dutyItem });
   }
   const collectionName = resource === 'nurse-tasks' ? 'nurseTasks' : resource === 'nurse-assignments' ? 'nurseAssignments' : resource === 'clinical-notes' ? 'clinicalNotes' : resource === 'test-results' ? 'testResults' : resource === 'messages' ? 'messages' : resource === 'caretaker' ? 'caretakerAssignments' : resource === 'exercise-plans' ? 'exercisePlans' : resource;
-  const record = { ...body, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const record = Object.fromEntries(
+    Object.entries({
+      ...body,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }).filter(([, value]) => value !== undefined)
+  );
   let createdId = `local-${Date.now()}`;
   try {
     const created = await withTimeout(addDoc(collection(db, collectionName), record), 1500);

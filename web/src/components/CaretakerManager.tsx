@@ -93,7 +93,7 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
       const assignedName = name.trim();
 
       // Calls backend: POST /api/caretaker/assign
-      await assignCaretaker({
+      const assignment = await assignCaretaker({
         patientId,
         patientName,
         patientPatientId,
@@ -105,15 +105,8 @@ export const CaretakerManager: React.FC<CaretakerManagerProps> = ({
         accessLevel,
       });
 
-      const subject = encodeURIComponent(`MedTrace Caretaker Access Invitation for ${patientName}`);
-      const body = encodeURIComponent(
-        `Hello ${assignedName},\n\nYou have been authorized as a Caretaker / Guardian for ${patientName} on the MedTrace Healthcare Network.\n\nTo view vitals, medications, and clinical updates:\n1. Go to: ${window.location.origin}/register\n2. Register using this email address: ${assignedEmail}\n3. Select Role: Caretaker\n\nWhen you log in, your Caretaker Dashboard will automatically link to ${patientName}.\n\nBest regards,\nMedTrace Health Team`
-      );
-      const mailtoUrl = `mailto:${assignedEmail}?subject=${subject}&body=${body}`;
-
       setAssignFeedback({
-        message: `Caretaker ${assignedName} (${assignedEmail}) assigned successfully via POST /api/caretaker/assign! When they log in or register with this email as a Caretaker, they will automatically see your Caretaker Dashboard.`,
-        mailtoLink: mailtoUrl,
+        message: `Caretaker ${assignedName} (${assignedEmail}) assigned successfully. ${assignment.emailSent ? 'The invitation email was sent through EmailJS.' : `The assignment was saved, but the invitation email could not be sent. ${assignment.emailError || 'Check the EmailJS service, template, and recipient configuration.'}`} When they log in or register with this email as a Caretaker, they will automatically see your Caretaker Dashboard.`,
       });
 
       setOpenModal(false);

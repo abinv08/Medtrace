@@ -14,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { MedTraceLogo } from '../../components/Logo';
 import api from '../../services/api';
 import { db, patientProvisioningAuth } from '../../config/firebase';
+import { collectRazorpayPayment } from '../../services/razorpayService';
 
 interface IntakePatient {
   id?: string;
@@ -38,6 +39,7 @@ interface PaymentRecord {
   method: string;
   status: string;
   createdAt?: string;
+  razorpayPaymentId?: string;
 }
 
 interface ClinicalStaff {
@@ -192,6 +194,16 @@ export const ReceptionDashboard: React.FC = () => {
     setSubmitting(true);
     try {
       const createdAt = new Date().toISOString();
+      let razorpayPaymentId: string | undefined;
+      if (form.paymentMethod === 'Razorpay') {
+        const payment = await collectRazorpayPayment({
+          amountInRupees: Number(form.amount),
+          patientName: form.name.trim(),
+          email: form.email.trim().toLowerCase(),
+          phone: form.phone.trim(),
+        });
+        razorpayPaymentId = payment.paymentId;
+      }
       const normalizedPhone = form.phone.trim().replace(/\s+/g, '');
       const existingPatient = patients.find((patient) => getPatientPhone(patient).replace(/\s+/g, '') === normalizedPhone);
       let patient = existingPatient;
@@ -246,6 +258,7 @@ export const ReceptionDashboard: React.FC = () => {
         amount: Number(form.amount),
         method: form.paymentMethod,
         status: 'paid',
+        ...(razorpayPaymentId ? { razorpayPaymentId, verificationStatus: 'unverified_frontend_callback' } : {}),
         createdBy: user?.id || 'reception',
         createdAt,
       });
@@ -380,7 +393,7 @@ export const ReceptionDashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mt: 3, mb: 1.5, color: '#546E7A' }}>PAYMENT</Typography>
               <Grid container spacing={2}>
                 <Grid item xs={12} sm={6}><TextField fullWidth required type="number" label="Amount" value={form.amount} onChange={updateField('amount')} InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment>, inputProps: { min: 0 } }} /></Grid>
-                <Grid item xs={12} sm={6}><TextField fullWidth select label="Payment method" value={form.paymentMethod} onChange={updateField('paymentMethod')} InputProps={{ startAdornment: <InputAdornment position="start"><CreditCard fontSize="small" /></InputAdornment> }}><MenuItem value="Cash">Cash</MenuItem><MenuItem value="Card">Card</MenuItem><MenuItem value="UPI">UPI</MenuItem><MenuItem value="Insurance">Insurance</MenuItem></TextField></Grid>
+                <Grid item xs={12} sm={6}><TextField fullWidth select label="Payment method" value={form.paymentMethod} onChange={updateField('paymentMethod')} InputProps={{ startAdornment: <InputAdornment position="start"><CreditCard fontSize="small" /></InputAdornment> }}><MenuItem value="Cash">Cash</MenuItem><MenuItem value="Card">Card</MenuItem><MenuItem value="UPI">UPI</MenuItem><MenuItem value="Razorpay">Razorpay</MenuItem><MenuItem value="Insurance">Insurance</MenuItem></TextField></Grid>
               </Grid>
               <Button type="submit" fullWidth variant="contained" size="large" startIcon={submitting ? <CircularProgress size={18} color="inherit" /> : <Add />} disabled={submitting} sx={{ mt: 3 }}>Register patient and record payment</Button>
             </Paper>
