@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const receptionController_1 = require("../controllers/receptionController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
+const router = (0, express_1.Router)();
+router.use(authMiddleware_1.authenticateJWT);
+router.use((0, authMiddleware_1.requireRole)('reception', 'receptionist', 'hospital_admin', 'admin'));
+router.get('/staff', receptionController_1.getReceptionStaff);
+router.put('/staff/:id/status', receptionController_1.updateReceptionStaffStatus);
+exports.default = router;

@@ -4,10 +4,55 @@ const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
   port: Number(process.env.EMAIL_PORT) || 587,
   auth: {
-    user: process.env.EMAIL_USER || 'medtrace_demo',
-    pass: process.env.EMAIL_PASS || 'medtrace_pass',
+    user: process.env.EMAIL_USER || 'abint2023@gmail.com',
+    pass: process.env.EMAIL_PASS || 'wodq mdqn ylcy pzcs',
   },
 });
+
+export const sendCaretakerAssignmentEmail = async (details: {
+  caretakerEmail: string;
+  caretakerName: string;
+  patientName: string;
+  relationship: string;
+  accessLevel: string;
+}): Promise<boolean> => {
+  const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:3000';
+  const mailOptions = {
+    from: process.env.EMAIL_FROM || `"MedTrace Health Team" <${process.env.EMAIL_USER || 'no-reply@medtrace.ai'}>`,
+    to: details.caretakerEmail,
+    subject: `MedTrace Care Network Access for ${details.patientName}`,
+    text: [
+      `Hello ${details.caretakerName},`,
+      '',
+      `You have been assigned as a ${details.relationship} caretaker for ${details.patientName}.`,
+      `Access level: ${details.accessLevel}`,
+      '',
+      `Register or sign in at: ${clientOrigin}/register`,
+      `Use this email address to access the Caretaker Dashboard: ${details.caretakerEmail}`,
+      '',
+      'MedTrace Health Team',
+    ].join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #1E293B; max-width: 600px; margin: 0 auto; border: 1px solid #E2E8F0; border-radius: 12px;">
+        <h2 style="color: #1565C0;">MedTrace Care Network</h2>
+        <p>Hello <strong>${details.caretakerName}</strong>,</p>
+        <p>You have been assigned as a <strong>${details.relationship}</strong> caretaker for <strong>${details.patientName}</strong>.</p>
+        <p>Access level: <strong>${details.accessLevel}</strong></p>
+        <p><a href="${clientOrigin}/register">Register or sign in to MedTrace</a> using this email address.</p>
+        <p style="color: #64748B; font-size: 13px;">After signing in, the assigned patient will appear in your Caretaker Dashboard.</p>
+        <p>MedTrace Health Team</p>
+      </div>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('Failed to send caretaker assignment email:', error);
+    return false;
+  }
+};
 
 export const sendPasswordResetEmail = async (
   email: string,

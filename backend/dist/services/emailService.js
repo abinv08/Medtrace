@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendPasswordResetEmail = void 0;
+exports.sendPasswordResetEmail = exports.sendCaretakerAssignmentEmail = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const transporter = nodemailer_1.default.createTransport({
     host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
@@ -13,6 +13,45 @@ const transporter = nodemailer_1.default.createTransport({
         pass: process.env.EMAIL_PASS || 'medtrace_pass',
     },
 });
+const sendCaretakerAssignmentEmail = async (details) => {
+    const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:3000';
+    const mailOptions = {
+        from: process.env.EMAIL_FROM || `"MedTrace Health Team" <${process.env.EMAIL_USER || 'no-reply@medtrace.ai'}>`,
+        to: details.caretakerEmail,
+        subject: `MedTrace Care Network Access for ${details.patientName}`,
+        text: [
+            `Hello ${details.caretakerName},`,
+            '',
+            `You have been assigned as a ${details.relationship} caretaker for ${details.patientName}.`,
+            `Access level: ${details.accessLevel}`,
+            '',
+            `Register or sign in at: ${clientOrigin}/register`,
+            `Use this email address to access the Caretaker Dashboard: ${details.caretakerEmail}`,
+            '',
+            'MedTrace Health Team',
+        ].join('\n'),
+        html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #1E293B; max-width: 600px; margin: 0 auto; border: 1px solid #E2E8F0; border-radius: 12px;">
+        <h2 style="color: #1565C0;">MedTrace Care Network</h2>
+        <p>Hello <strong>${details.caretakerName}</strong>,</p>
+        <p>You have been assigned as a <strong>${details.relationship}</strong> caretaker for <strong>${details.patientName}</strong>.</p>
+        <p>Access level: <strong>${details.accessLevel}</strong></p>
+        <p><a href="${clientOrigin}/register">Register or sign in to MedTrace</a> using this email address.</p>
+        <p style="color: #64748B; font-size: 13px;">After signing in, the assigned patient will appear in your Caretaker Dashboard.</p>
+        <p>MedTrace Health Team</p>
+      </div>
+    `,
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+        return true;
+    }
+    catch (error) {
+        console.error('Failed to send caretaker assignment email:', error);
+        return false;
+    }
+};
+exports.sendCaretakerAssignmentEmail = sendCaretakerAssignmentEmail;
 const sendPasswordResetEmail = async (email, resetToken) => {
     const resetUrl = `${process.env.CLIENT_ORIGIN || 'http://localhost:3000'}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
     const mailOptions = {

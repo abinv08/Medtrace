@@ -4,6 +4,7 @@ import { CaretakerAssignment, ICaretakerAssignment } from '../models/CaretakerAs
 import { Patient } from '../models/Patient';
 import { User } from '../models/User';
 import { AuthenticatedRequest } from '../middleware/authMiddleware';
+import { sendCaretakerAssignmentEmail } from '../services/emailService';
 
 // In-Memory Fallback Store if MongoDB is disconnected
 const memoryAssignments = new Map<string, any>();
@@ -149,10 +150,22 @@ export const assignCaretaker = async (
       memoryAssignments.set(id, assignment);
     }
 
+    const emailSent = await sendCaretakerAssignmentEmail({
+      caretakerEmail: normalizedEmail,
+      caretakerName: caretakerName || name || 'Caretaker',
+      patientName: req.body.patientName || 'your assigned patient',
+      relationship: relationship || 'Caretaker',
+      accessLevel: req.body.accessLevel || 'Assigned patient care access',
+    });
+
     res.status(201).json({
       success: true,
       message: 'Caretaker assigned successfully',
       assignment,
+      emailSent,
+      emailMessage: emailSent
+        ? 'Assignment email sent successfully.'
+        : 'Caretaker assigned, but the assignment email could not be sent. Check SMTP configuration.',
     });
   } catch (error: any) {
     res.status(500).json({
@@ -355,4 +368,3 @@ export const getPatientCaretakers = async (
     });
   }
 };
-

@@ -36,6 +36,21 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'careStatus', 'admittedAt', 'dischargedAt', 'dischargedBy', 'updatedAt'
         ]);
+
+      // Reception staff may only change the availability flag for clinical staff.
+      allow update: if roleIs(['Reception', 'Receptionist', 'reception', 'receptionist'])
+        && resource.data.role in ['Doctor', 'Nurse', 'Head Nurse']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isActive']);
+
+      allow update: if roleIs(['Reception', 'Receptionist', 'reception', 'receptionist'])
+        && resource.data.role == 'Patient'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'careStatus', 'admittedAt', 'dischargedAt', 'dischargedBy', 'updatedAt'
+        ]);
+
+      allow create: if roleIs(['Reception', 'Receptionist', 'reception', 'receptionist'])
+        && request.resource.data.role == 'Patient'
+        && request.resource.data.isActive == true;
     }
 
     // ── Appointments ───────────────────────────────────────────────────────────
